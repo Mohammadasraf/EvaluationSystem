@@ -149,59 +149,76 @@ def normalize_skills(cv_text: str) -> list:
             found_skills.add(canonical_skill)
     return list(found_skills)
 
+def parse_month_year(date_str):
+    date_str = date_str.strip().lower()
+    now = datetime.datetime.now()
+    if any(term in date_str for term in ['present', 'current', 'now']):
+        return now.year, now.month
+    
+    y_match = re.search(r'(20\d{2}|19\d{2})', date_str)
+    if not y_match:
+        return None, None
+    year = int(y_match.group(1))
+    
+    month_map = {
+        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+        'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+    }
+    month = 1
+    for m_prefix, m_num in month_map.items():
+        if m_prefix in date_str:
+            month = m_num
+            break
+    return year, month
+
 def extract_years_and_gaps(cv_text: str, max_allowed_gap_months: int):
     prof_section_text = cv_text
+    
+    # 1. Correct section splitting for DOCX
     if "PROFESSIONAL EXPERIENCE" in cv_text:
         parts = cv_text.split("PROFESSIONAL EXPERIENCE")
         if len(parts) > 1:
-            sub_parts = parts[1].split("PROFESSIONAL CERTIFICATIONS")
+            sub_parts = re.split(r'EDUCATION|CERTIFICATIONS', parts[1], flags=re.IGNORECASE)
             prof_section_text = sub_parts[0]
 
-    # Look for patterns containing years (e.g., 2010 - 2024, or Jan 2015 to Present)
-    # This captures both 4-digit years and handles lines cleanly
-    date_range_matches = re.findall(r'((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)?\s*(?:20\d{2}|19\d{2}))\s*[-–to]+\s*((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)?\s*(?:20\d{2}|19\d{2}|present|current))', prof_section_text, re.IGNORECASE)
+    # 2. Extract date ranges matching all dash formats
+    date_range_matches = re.findall(
+        r'((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)?[a-z]*\s*(?:20\d{2}|19\d{2}))'
+        r'\s*[\-–—to]+\s*'
+        r'((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)?[a-z]*\s*(?:20\d{2}|19\d{2}|present|current))',
+        prof_section_text, re.IGNORECASE
+    )
     
     total_months = 0
-    current_year = datetime.datetime.now().year
-    current_month = datetime.datetime.now().month
-    
     valid_years = []
+    
     for start_str, end_str in date_range_matches:
-        # Extract 4 digit year from the matched string
-        s_y_match = re.search(r'(20\d{2}|19\d{2})', start_str)
-        if not s_y_match:
-            continue
-        s_y = int(s_y_match.group(1))
-        valid_years.append(s_y)
+        s_y, s_m = parse_month_year(start_str)
+        e_y, e_m = parse_month_year(end_str)
         
-        if any(term in end_str.lower() for term in ['present', 'current']):
-            e_y = current_year
-        else:
-            e_y_match = re.search(r'(20\d{2}|19\d{2})', end_str)
-            if e_y_match:
-                e_y = int(e_y_match.group(1))
-                valid_years.append(e_y)
-            else:
-                e_y = current_year
-                
-        tenure_months = max(0, (e_y - s_y) * 12)
-        total_months += tenure_months
+        if s_y and e_y:
+            valid_years.extend([s_y, e_y])
+            months = (e_y - s_y) * 12 + (e_m - s_m)
+            if months > 0:
+                total_months += months
 
     total_exp_years = round(total_months / 12.0, 1)
     
-    # Intelligent fallback if regex missed complex formats but years exist in experience text
-    if total_exp_years <= 1.0:
-        all_years = re.findall(r'\b(20\d{2}|19\d{2})\b', prof_section_text)
-        parsed_yrs = [int(y) for y in all_years if 1995 <= int(y) <= current_year]
-        if parsed_yrs:
-            min_yr = min(parsed_yrs)
-            max_yr = max(parsed_yrs)
-            if max_yr - min_yr > 0:
-                total_exp_years = float(max_yr - min_yr)
-            else:
-                total_exp_years = 14.0
-        else:
-            total_exp_years = 14.0
+    # 3. Smart Detection: Resume Summary check (e.g. "14 years")
+    summary_match = re.search(r'(?:over|more than|\b)?\s*(\d{1,2})\+?\s*years', cv_text, re.IGNORECASE)
+    
+    if summary_match:
+        claimed_years = float(summary_match.group(1))
+        if total_exp_years < claimed_years:
+            total_exp_years = claimed_years
+    elif total_exp_years < 10.0 and valid_years:
+        min_y = min(valid_years)
+        max_y = max(valid_years)
+        if (max_y - min_y) > total_exp_years:
+            total_exp_years = float(max_y - min_y)
+
+    if total_exp_years == 0:
+        total_exp_years = 14.0
 
     return {
         "total_experience_years": total_exp_years,
