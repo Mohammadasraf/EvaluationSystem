@@ -24,8 +24,8 @@ except ImportError:
 STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDS = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
-MODEL_VERSION = "qwen/qwen3.8-27b"  # Updated to your verified available model ID
-LOGIC_VERSION = "v7.4-Enterprise-Qwen-Fixed"
+MODEL_VERSION = "qwen/qwen3.8-27b"  # Verified available model ID
+LOGIC_VERSION = "v7.7-Enterprise-Batching-Engine"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
 os.makedirs(STORAGE_JDS, exist_ok=True)
@@ -160,7 +160,6 @@ def parse_month_year(date_str):
         return None, None
     year = int(y_match.group(1))
     
-    # Numeric month format support (jaise 05/2025 ya 12/2010)
     m_num_match = re.search(r'^(\d{1,2})[/\-]', date_str)
     if m_num_match:
         month = int(m_num_match.group(1))
@@ -181,7 +180,6 @@ def parse_month_year(date_str):
 def extract_years_and_gaps(cv_text: str, max_allowed_gap_months: int):
     prof_section_text = cv_text
     
-    # 1. Alag-alag possible headers check karein aur Education/Certifications ko exclude karein
     for header in ["WORK EXPERIENCE", "PROFESSIONAL EXPERIENCE", "EXPERIENCE"]:
         if header in cv_text:
             parts = cv_text.split(header)
@@ -190,7 +188,6 @@ def extract_years_and_gaps(cv_text: str, max_allowed_gap_months: int):
                 prof_section_text = sub_parts[0]
                 break
 
-    # 2. Date ranges extract karein (Numeric aur Text dono formats ke liye)
     date_range_matches = re.findall(
         r'((?:\d{1,2}[/\-])?(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)?[a-z]*\s*(?:20\d{2}|19\d{2}))'
         r'\s*[\-–—to]+\s*'
@@ -298,7 +295,7 @@ def generate_word_report(candidate_name, recruiter_id, overall_score, recommenda
 st.set_page_config(page_title="Enterprise Candidate Evaluation System", layout="wide")
 
 st.title("⚡ Enterprise Hybrid Candidate Evaluation System")
-st.caption("Deterministic Engine + AI Analysis + Word (.docx) Export")
+st.caption("Deterministic Engine + AI Batching Analysis + Word (.docx) Export")
 
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = [
@@ -313,7 +310,6 @@ with st.sidebar:
     st.header("🔐 Security & Session")
     recruiter_id = st.text_input("Recruiter Email / ID", value="asrafshaikh86@gmail.com")
     
-    # Check if Groq API Key exists in Streamlit secrets
     groq_api_key = ""
     try:
         if "GROQ_API_KEY" in st.secrets and st.secrets["GROQ_API_KEY"]:
@@ -321,7 +317,6 @@ with st.sidebar:
     except Exception:
         pass
         
-    # Agar secrets mein key nahi hai, TABHI input box dikhayein aur hide kardein agar hai
     if not groq_api_key:
         if "groq_api_key_input" not in st.session_state:
             st.session_state.groq_api_key_input = ""
@@ -368,12 +363,13 @@ with col_cv:
 
 st.markdown("---")
 
-# Section 2: Dynamic Rules
-st.markdown("### 2. 🎛️ Dynamic N-Rules Builder")
+# Section 2: Dynamic Rules Builder (Supports 10+ Rules via Batching)
+st.markdown("### 2. 🎛️ Dynamic N-Rules Builder (Automatic Batching Enabled)")
 with st.expander("➕ Manage Custom Evaluation Rules", expanded=False):
     new_name = st.text_input("Rule Name")
     new_type = st.selectbox("Rule Type", ["Deterministic", "Skill Check", "Compliance", "Custom"])
     new_criteria = st.text_area("Rule Description / Criteria")
+    
     if st.button("Add Rule"):
         if new_name and new_criteria:
             st.session_state.custom_rules.append({
@@ -384,6 +380,8 @@ with st.expander("➕ Manage Custom Evaluation Rules", expanded=False):
             })
             st.success("Rule added successfully!")
             st.rerun()
+        else:
+            st.warning("Please fill both Rule Name and Criteria.")
 
 rules_to_keep = []
 for idx, rule in enumerate(st.session_state.custom_rules):
@@ -398,46 +396,26 @@ st.session_state.custom_rules = rules_to_keep
 st.markdown("---")
 
 # ------------------------------------------------------------------------------
-# HYBRID EVALUATION EXECUTION (DIRECT REQUESTS + SSL BYPASS)
+# AUTOMATIC BATCHING EVALUATION ENGINE
 # ------------------------------------------------------------------------------
-def evaluate_hybrid_system(cv_text, jd_text, rules_list, groq_api_key):
-    normalized_skills = normalize_skills(cv_text)
-    exp_gap_data = extract_years_and_gaps(cv_text, max_allowed_gap_months=12)
-    qualification_match = map_education(cv_text)
-    evidence_map = find_evidence_snippets(cv_text, normalized_skills)
-
-    det_analysis = {
-        "normalized_skills": normalized_skills,
-        "qualification_match": qualification_match,
-        **exp_gap_data
-    }
-
+def evaluate_batch_chunk(cv_text, jd_text, rule_chunk, groq_api_key):
     prompt = f"""
-You are an enterprise HR AI evaluator. Evaluate the candidate using a HYBRID approach against the dynamic JD and custom rules.
+You are an enterprise HR AI evaluator. Evaluate the candidate against the provided sub-set of rules concisely.
 
 --- JOB DESCRIPTION ---
 {jd_text}
 
---- DETERMINISTIC PRE-PARSED METRICS ---
-- Normalized Skills Found: {json.dumps(normalized_skills)}
-- Education Mapped: {qualification_match}
-- Total Experience: {exp_gap_data['total_experience_years']} Years
-- Career Gap Analysis: {exp_gap_data['gap_reason']}
+--- RULES SUB-SET TO EVALUATE ---
+{json.dumps(rule_chunk, indent=2)}
 
---- CUSTOM N-RULES TO EVALUATE ---
-{json.dumps(rules_list, indent=2)}
-
---- CANDIDATE RESUME ---
+--- RESUME ---
 {cv_text}
 
-Task: Evaluate each custom rule with confidence scores and reasoning. Return ONLY a valid JSON structure:
+Return ONLY valid JSON format containing the evaluations for these specific rules:
 {{
   "Rule Evaluations": {{
-    "Rule Name": {{"result": "Pass/Fail/Status", "confidence": "95%", "reasoning": "..."}}
-  }},
-  "Overall Candidate Match Score": 88,
-  "Derived Recommendation": "Strong Hire",
-  "AI Contextual Summary": "..."
+    "Rule Name": {{"result": "Pass/Fail", "confidence": "90%", "reasoning": "Short explanation under 15 words."}}
+  }}
 }}
 """
 
@@ -450,6 +428,7 @@ Task: Evaluate each custom rule with confidence scores and reasoning. Return ONL
         "model": MODEL_VERSION,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.1,
+        "max_tokens": 700,
         "response_format": {"type": "json_object"}
     }
 
@@ -462,32 +441,78 @@ Task: Evaluate each custom rule with confidence scores and reasoning. Return ONL
             verify=False
         )
         
-        if response.status_code == 401:
-            return det_analysis, evidence_map, {"Error": "Authentication Error: Invalid Groq API Key."}
-        elif response.status_code != 200:
-            return det_analysis, evidence_map, {"Error": f"Groq API Error ({response.status_code}): {response.text}"}
+        if response.status_code != 200:
+            return {"Error": f"Groq API Error ({response.status_code}): {response.text}"}
             
         res_json = response.json()
         content = res_json["choices"][0]["message"]["content"]
-        llm_output = json.loads(content)
-        return det_analysis, evidence_map, llm_output
-
-    except requests.exceptions.RequestException as e:
-        return det_analysis, evidence_map, {"Error": f"Network Connection Error: {e}"}
+        return json.loads(content)
     except Exception as e:
-        return det_analysis, evidence_map, {"Error": f"Unexpected Error: {str(e)}"}
+        return {"Error": str(e)}
 
-if st.button("🚀 Run Enterprise Hybrid Evaluation", type="primary", use_container_width=True):
+def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
+    normalized_skills = normalize_skills(cv_text)
+    exp_gap_data = extract_years_and_gaps(cv_text, max_allowed_gap_months=12)
+    qualification_match = map_education(cv_text)
+    evidence_map = find_evidence_snippets(cv_text, normalized_skills)
+
+    det_analysis = {
+        "normalized_skills": normalized_skills,
+        "qualification_match": qualification_match,
+        **exp_gap_data
+    }
+
+    # Split rules into chunks of 4 to stay safely within token limits
+    chunk_size = 4
+    rule_chunks = [rules_list[i:i + chunk_size] for i in range(0, len(rules_list), chunk_size)]
+    
+    combined_rule_evals = {}
+    passed_rules_count = 0
+    total_rules = len(rules_list)
+
+    for chunk in rule_chunks:
+        res = evaluate_batch_chunk(cv_text, jd_text, chunk, groq_api_key)
+        if "Error" in res:
+            return det_analysis, evidence_map, res
+        
+        evals = res.get("Rule Evaluations", {})
+        for r_name, r_data in evals.items():
+            combined_rule_evals[r_name] = r_data
+            if "pass" in str(r_data.get("result", "")).lower():
+                passed_rules_count += 1
+
+    # Deterministic Aggregated Scoring & Recommendation
+    overall_score = round((passed_rules_count / max(total_rules, 1)) * 100, 1)
+    if overall_score >= 80:
+        recommendation = "Strong Hire"
+        summary = "Candidate successfully met the vast majority of evaluated enterprise and technical rules."
+    elif overall_score >= 50:
+        recommendation = "Consider"
+        summary = "Candidate met several criteria but requires further verification on specific gaps."
+    else:
+        recommendation = "Reject"
+        summary = "Candidate fell short on multiple critical rule thresholds."
+
+    final_output = {
+        "Rule Evaluations": combined_rule_evals,
+        "Overall Candidate Match Score": overall_score,
+        "Derived Recommendation": recommendation,
+        "AI Contextual Summary": summary
+    }
+
+    return det_analysis, evidence_map, final_output
+
+if st.button("🚀 Run Enterprise Batched Evaluation", type="primary", use_container_width=True):
     if not groq_api_key:
         st.error("Groq API Key is required.")
     elif not cv_text or not jd_text:
         st.warning("Please provide both JD and Candidate Resume.")
     else:
-        with st.spinner("Executing evaluation and preparing Word report..."):
+        with st.spinner("Executing batched evaluation across all rules and preparing report..."):
             cv_path = save_archived_file(cv_file, STORAGE_CVS, "CV") if cv_file else "Pasted Text"
             jd_path = save_archived_file(jd_file, STORAGE_JDS, "JD") if jd_file else "Pasted Text"
 
-            det_analysis, evidence_map, ai_results = evaluate_hybrid_system(cv_text, jd_text, st.session_state.custom_rules, groq_api_key)
+            det_analysis, evidence_map, ai_results = evaluate_hybrid_system_batched(cv_text, jd_text, st.session_state.custom_rules, groq_api_key)
 
             if "Error" in ai_results:
                 st.error(ai_results["Error"])
@@ -497,7 +522,6 @@ if st.button("🚀 Run Enterprise Hybrid Evaluation", type="primary", use_contai
                 rec = ai_results.get("Derived Recommendation", "Consider")
                 summary = ai_results.get("AI Contextual Summary", "")
 
-                # Save to DB
                 conn = sqlite3.connect(DB_PATH)
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -514,7 +538,7 @@ if st.button("🚀 Run Enterprise Hybrid Evaluation", type="primary", use_contai
                     overall_score,
                     rec,
                     rec,
-                    "Automated Initial Evaluation",
+                    "Automated Batched Evaluation",
                     cv_path,
                     jd_path,
                     json.dumps(st.session_state.custom_rules),
@@ -527,12 +551,10 @@ if st.button("🚀 Run Enterprise Hybrid Evaluation", type="primary", use_contai
                 conn.commit()
                 conn.close()
 
-                st.success("Evaluation completed successfully!")
+                st.success("Batched evaluation completed successfully!")
 
-                # Generate Word File in memory
                 word_file_io = generate_word_report(candidate_name, recruiter_id, overall_score, rec, det_analysis, rule_evals, evidence_map)
 
-                # Download Button for Word File
                 st.download_button(
                     label="📥 Download Evaluation Report (.docx)",
                     data=word_file_io,
@@ -541,14 +563,13 @@ if st.button("🚀 Run Enterprise Hybrid Evaluation", type="primary", use_contai
                     type="primary"
                 )
 
-                # Metrics Dashboard
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("Overall Match Score", f"{overall_score} / 100")
                 m2.metric("AI Recommendation", rec)
                 m3.metric("Parsed Experience", f"{det_analysis['total_experience_years']} Yrs")
                 m4.metric("Normalized Skills", len(det_analysis['normalized_skills']))
 
-                st.markdown("### 📊 N-Rules Evaluation Matrix & Confidence")
+                st.markdown("### 📊 N-Rules Evaluation Matrix & Confidence (Batched)")
                 grid = []
                 for r_name, r_data in rule_evals.items():
                     grid.append({
