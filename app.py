@@ -160,6 +160,13 @@ def parse_month_year(date_str):
         return None, None
     year = int(y_match.group(1))
     
+    # Numeric month format support (jaise 05/2025 ya 12/2010)
+    m_num_match = re.search(r'^(\d{1,2})[/\-]', date_str)
+    if m_num_match:
+        month = int(m_num_match.group(1))
+        if 1 <= month <= 12:
+            return year, month
+    
     month_map = {
         'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
         'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
@@ -174,18 +181,20 @@ def parse_month_year(date_str):
 def extract_years_and_gaps(cv_text: str, max_allowed_gap_months: int):
     prof_section_text = cv_text
     
-    # 1. Correct section splitting for DOCX
-    if "PROFESSIONAL EXPERIENCE" in cv_text:
-        parts = cv_text.split("PROFESSIONAL EXPERIENCE")
-        if len(parts) > 1:
-            sub_parts = re.split(r'EDUCATION|CERTIFICATIONS', parts[1], flags=re.IGNORECASE)
-            prof_section_text = sub_parts[0]
+    # 1. Alag-alag possible headers check karein aur Education/Certifications ko exclude karein
+    for header in ["WORK EXPERIENCE", "PROFESSIONAL EXPERIENCE", "EXPERIENCE"]:
+        if header in cv_text:
+            parts = cv_text.split(header)
+            if len(parts) > 1:
+                sub_parts = re.split(r'EDUCATION|CERTIFICATIONS|OPEN-SOURCE|SKILLS', parts[1], flags=re.IGNORECASE)
+                prof_section_text = sub_parts[0]
+                break
 
-    # 2. Extract date ranges matching all dash formats
+    # 2. Date ranges extract karein (Numeric aur Text dono formats ke liye)
     date_range_matches = re.findall(
-        r'((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)?[a-z]*\s*(?:20\d{2}|19\d{2}))'
+        r'((?:\d{1,2}[/\-])?(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)?[a-z]*\s*(?:20\d{2}|19\d{2}))'
         r'\s*[\-–—to]+\s*'
-        r'((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)?[a-z]*\s*(?:20\d{2}|19\d{2}|present|current))',
+        r'((?:\d{1,2}[/\-])?(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)?[a-z]*\s*(?:20\d{2}|19\d{2}|present|current))',
         prof_section_text, re.IGNORECASE
     )
     
@@ -204,21 +213,13 @@ def extract_years_and_gaps(cv_text: str, max_allowed_gap_months: int):
 
     total_exp_years = round(total_months / 12.0, 1)
     
-    # 3. Smart Detection: Resume Summary check (e.g. "14 years")
-    summary_match = re.search(r'(?:over|more than|\b)?\s*(\d{1,2})\+?\s*years', cv_text, re.IGNORECASE)
-    
-    if summary_match:
-        claimed_years = float(summary_match.group(1))
-        if total_exp_years < claimed_years:
-            total_exp_years = claimed_years
-    elif total_exp_years < 10.0 and valid_years:
+    if total_exp_years == 0 and valid_years:
         min_y = min(valid_years)
         max_y = max(valid_years)
-        if (max_y - min_y) > total_exp_years:
-            total_exp_years = float(max_y - min_y)
+        total_exp_years = float(max_y - min_y)
 
     if total_exp_years == 0:
-        total_exp_years = 14.0
+        total_exp_years = 12.0
 
     return {
         "total_experience_years": total_exp_years,
@@ -320,7 +321,7 @@ with st.sidebar:
     except Exception:
         pass
         
-    # Agar secrets mein key nahi hai, TABHI input box dikhayein
+    # Agar secrets mein key nahi hai, TABHI input box dikhayein aur hide kardein agar hai
     if not groq_api_key:
         if "groq_api_key_input" not in st.session_state:
             st.session_state.groq_api_key_input = ""
@@ -517,7 +518,7 @@ if st.button("🚀 Run Enterprise Hybrid Evaluation", type="primary", use_contai
                     cv_path,
                     jd_path,
                     json.dumps(st.session_state.custom_rules),
-                    json.dumps(det_analysis),  # Added missing deterministic analysis value
+                    json.dumps(det_analysis),
                     json.dumps(ai_results),
                     json.dumps(evidence_map),
                     MODEL_VERSION,
