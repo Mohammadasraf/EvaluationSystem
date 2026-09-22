@@ -25,7 +25,7 @@ STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDS = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "qwen/qwen3.8-27b"  # Verified available model ID
-LOGIC_VERSION = "v8.0-Universal-Dynamic-Engine"
+LOGIC_VERSION = "v8.1-Universal-With-Recruiter-Conclusion"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
 os.makedirs(STORAGE_JDS, exist_ok=True)
@@ -179,7 +179,6 @@ def extract_years_and_gaps(cv_text: str):
     }
 
 def extract_universal_evidence(cv_text: str) -> dict:
-    # Extracts meaningful sentence snippets dynamically for reporting
     lines = [line.strip() for line in cv_text.split("\n") if len(line.strip()) > 25]
     return {"Key Experience Excerpts": lines[:5]}
 
@@ -233,7 +232,7 @@ def generate_word_report(candidate_name, recruiter_id, overall_score, recommenda
 st.set_page_config(page_title="Universal Enterprise Candidate Evaluator", layout="wide")
 
 st.title("⚡ Universal Enterprise Candidate Evaluation System")
-st.caption("Domain-Independent Engine + AI Batching Analysis + Word (.docx) Export")
+st.caption("Domain-Independent Engine + AI Batching Analysis + Word (.docx) Export + Recruiter Suggestions")
 
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = [
@@ -510,6 +509,39 @@ if st.button("🚀 Run Universal Batched Evaluation", type="primary", use_contai
                         "Reasoning": r_data.get("reasoning")
                     })
                 st.table(pd.DataFrame(grid))
+
+                # ------------------------------------------------------------------
+                # NEW SECTION: EVALUATION SUMMARY NOTE, CONCLUSION & RECRUITER SUGGESTIONS
+                # ------------------------------------------------------------------
+                st.markdown("---")
+                st.header("📝 Evaluation Summary Note, Conclusion & Recruiter Suggestions")
+                
+                # Dynamic Logic for Suggestions & Conclusion based on Score & Failures
+                failed_rules = [r_name for r_name, r_data in rule_evals.items() if "fail" in str(r_data.get("result", "")).lower()]
+                
+                if overall_score >= 80:
+                    conclusion_status = "✅ High Potential / Ready for Interview"
+                    action_suggestion = "Proceed directly to technical or HR interview rounds. Candidate demonstrates strong alignment with job requirements."
+                elif overall_score >= 50:
+                    conclusion_status = "⚠️ Moderate Match / Needs Clarification or CV Update"
+                    if failed_rules:
+                        action_suggestion = f"Candidate shows promise in overall background, but specific required areas/skills (e.g., {', '.join(failed_rules)}) are missing or unclear in the CV. Consider asking the candidate to send an updated CV highlighting these skills before rejection."
+                    else:
+                        action_suggestion = "Candidate meets basic criteria but requires a quick screening call to verify depth of experience."
+                else:
+                    conclusion_status = "❌ Low Alignment / Not Recommended"
+                    action_suggestion = "Significant gaps found against core JD requirements. Recommend sending a polite rejection notice or keeping on file for future roles."
+
+                st.info(f"**Conclusion Status:** {conclusion_status}\n\n**Overall Score:** {overall_score}/100 | **Total Experience:** {det_analysis['total_experience_years']} Years")
+                
+                st.markdown("#### 💡 Actionable Suggestions for Recruiter")
+                st.markdown(f"""
+                1. **Next Step:** {action_suggestion}
+                2. **Missing/Weak Areas to Probe:** {', '.join(failed_rules) if failed_rules else 'None identified. All evaluated criteria passed successfully.'}
+                3. **Suggested Communication Strategy:** 
+                   - *If skills are missing despite experience:* Request an updated CV from the candidate with explicit mention of the required technology stack.
+                   - *If strong fit:* Send out interview availability slots promptly.
+                """)
 
 # ------------------------------------------------------------------------------
 # AUDIT TRAIL LOGS
