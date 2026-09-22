@@ -312,24 +312,28 @@ with st.sidebar:
     st.header("🔐 Security & Session")
     recruiter_id = st.text_input("Recruiter Email / ID", value="asrafshaikh86@gmail.com")
     
-    # Groq API Key automatic fetching aur session state ke liye
-    default_groq_key = ""
+    # Check if Groq API Key exists in Streamlit secrets
+    groq_api_key = ""
     try:
-        if "GROQ_API_KEY" in st.secrets:
-            default_groq_key = st.secrets["GROQ_API_KEY"]
+        if "GROQ_API_KEY" in st.secrets and st.secrets["GROQ_API_KEY"]:
+            groq_api_key = st.secrets["GROQ_API_KEY"]
     except Exception:
         pass
         
-    if "groq_api_key_input" not in st.session_state:
-        st.session_state.groq_api_key_input = default_groq_key
+    # Agar secrets mein key nahi hai, TABHI input box dikhayein
+    if not groq_api_key:
+        if "groq_api_key_input" not in st.session_state:
+            st.session_state.groq_api_key_input = ""
+            
+        groq_api_key = st.text_input(
+            "Groq API Key", 
+            value=st.session_state.groq_api_key_input, 
+            type="password"
+        )
+        st.session_state.groq_api_key_input = groq_api_key
+    else:
+        st.success("✅ Groq API Key loaded securely from Secrets")
         
-    groq_api_key = st.text_input(
-        "Groq API Key", 
-        value=st.session_state.groq_api_key_input, 
-        type="password"
-    )
-    st.session_state.groq_api_key_input = groq_api_key
-    
     st.info(f"Model: {MODEL_VERSION}\nLogic: {LOGIC_VERSION}")
 
 # Section 1: Inputs
