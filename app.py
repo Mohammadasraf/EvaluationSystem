@@ -270,7 +270,7 @@ with st.sidebar:
     st.info(f"Model: {MODEL_VERSION}\nLogic: {LOGIC_VERSION}")
 
 # Section 1: Inputs
-st.markdown("### 1. Dynamic Inputs (Job Description & Candidate Resume)")
+st.markdown("### 1. Inputs (Job Description & Candidate Resume)")
 col_jd, col_cv = st.columns(2)
 
 with col_jd:
@@ -300,8 +300,8 @@ with col_cv:
 
 st.markdown("---")
 
-# Section 2: Dynamic Rules Builder
-st.markdown("### 2. 🎛️ Dynamic N-Rules Builder (Universal Batching)")
+# Section 2: Rules Builder
+st.markdown("### 2. 🎛️ N-Rules Builder (Universal Batching)")
 with st.expander("➕ Manage Custom Evaluation Rules", expanded=False):
     new_name = st.text_input("Rule Name")
     new_type = st.selectbox("Rule Type", ["Deterministic", "Skill Check", "Compliance", "Custom"])
