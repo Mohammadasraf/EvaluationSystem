@@ -4,6 +4,9 @@ import json
 import sqlite3
 import datetime
 import io
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import fitz  # PyMuPDF
 import docx
 import pandas as pd
@@ -25,7 +28,7 @@ STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDS = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "qwen/qwen3.8-27b"  # Verified available model ID
-LOGIC_VERSION = "v8.1-Universal-With-Recruiter-Conclusion"
+LOGIC_VERSION = "v8.3-Universal-Any-Email-Recipient"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
 os.makedirs(STORAGE_JDS, exist_ok=True)
@@ -227,12 +230,54 @@ def generate_word_report(candidate_name, recruiter_id, overall_score, recommenda
     return bio
 
 # ------------------------------------------------------------------------------
+# EMAIL SENDER FUNCTION
+# ------------------------------------------------------------------------------
+def send_recruiter_email(sender_email, sender_password, recipient_email, candidate_name, overall_score, recommendation, conclusion_status, action_suggestion, failed_rules, total_exp):
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = sender_email
+        msg['To'] = recipient_email
+        msg['Subject'] = f"Evaluation Summary Note: {candidate_name} (Score: {overall_score}/100)"
+
+        body = f"""
+Dear Recipient,
+
+Here is the official evaluation summary, conclusion, and suggestions for the candidate:
+
+Candidate Name: {candidate_name}
+Overall Match Score: {overall_score} / 100
+Recommendation: {recommendation}
+Total Experience: {total_exp} Years
+
+----------------------------------------
+CONCLUSION STATUS: {conclusion_status}
+----------------------------------------
+
+ACTIONABLE SUGGESTIONS:
+1. Next Step: {action_suggestion}
+2. Areas to Probe / Missing Skills: {', '.join(failed_rules) if failed_rules else 'None. All criteria passed.'}
+
+Best regards,
+Enterprise Evaluation System
+"""
+        msg.attach(MIMEText(body, 'plain'))
+
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(sender_email, sender_password)
+        server.sendmail(sender_email, recipient_email, msg.as_string())
+        server.quit()
+        return True, "Email sent successfully!"
+    except Exception as e:
+        return False, str(e)
+
+# ------------------------------------------------------------------------------
 # STREAMLIT UI SETUP & SESSION STATE
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="Universal Enterprise Candidate Evaluator", layout="wide")
 
 st.title("⚡ Universal Enterprise Candidate Evaluation System")
-st.caption("Domain-Independent Engine + AI Batching Analysis + Word (.docx) Export + Recruiter Suggestions")
+st.caption("Domain-Independent Engine + AI Batching Analysis + Word Export + Any Recipient Email Dispatch")
 
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = [
@@ -244,9 +289,14 @@ if "custom_rules" not in st.session_state:
     ]
 
 with st.sidebar:
-    st.header("🔐 Security & Session")
-    recruiter_id = st.text_input("Recruiter Email / ID", value="asrafshaikh86@gmail.com")
+    st.header("🔐 Security & Credentials")
+    evaluator_id = st.text_input("Evaluator / User ID", value="asrafshaikh86@gmail.com")
     
+    st.markdown("---")
+    st.subheader("📧 Sender SMTP Settings (Your Gmail)")
+    sender_email_input = st.text_input("Sender Gmail Address", value="asrafshaikh86@gmail.com")
+    sender_password_input = st.text_input("Gmail App Password", type="password", help="Use Google App Password from your Google account security settings")
+
     groq_api_key = ""
     try:
         if "GROQ_API_KEY" in st.secrets and st.secrets["GROQ_API_KEY"]:
@@ -337,7 +387,7 @@ st.markdown("---")
 # ------------------------------------------------------------------------------
 def evaluate_batch_chunk(cv_text, jd_text, rule_chunk, groq_api_key):
     prompt = f"""
-You are a universal enterprise HR AI evaluator. Evaluate the candidate against the provided sub-set of rules objectively based strictly on the JD and Resume provided, regardless of the technology stack (e.g., Salesforce, .NET, Java, Medical, etc.).
+You are a universal enterprise HR AI evaluator. Evaluate the candidate against the provided sub-set of rules objectively based strictly on the JD and Resume provided, regardless of the technology stack.
 
 --- JOB DESCRIPTION ---
 {jd_text}
@@ -395,7 +445,6 @@ def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
         **exp_gap_data
     }
 
-    # Split rules into chunks of 4 to stay safely within token limits
     chunk_size = 4
     rule_chunks = [rules_list[i:i + chunk_size] for i in range(0, len(rules_list), chunk_size)]
     
@@ -464,7 +513,7 @@ if st.button("🚀 Run Universal Batched Evaluation", type="primary", use_contai
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    recruiter_id,
+                    evaluator_id,
                     candidate_name,
                     overall_score,
                     rec,
@@ -484,7 +533,7 @@ if st.button("🚀 Run Universal Batched Evaluation", type="primary", use_contai
 
                 st.success("Universal evaluation completed successfully!")
 
-                word_file_io = generate_word_report(candidate_name, recruiter_id, overall_score, rec, det_analysis, rule_evals, evidence_map)
+                word_file_io = generate_word_report(candidate_name, evaluator_id, overall_score, rec, det_analysis, rule_evals, evidence_map)
 
                 st.download_button(
                     label="📥 Download Evaluation Report (.docx)",
@@ -511,12 +560,11 @@ if st.button("🚀 Run Universal Batched Evaluation", type="primary", use_contai
                 st.table(pd.DataFrame(grid))
 
                 # ------------------------------------------------------------------
-                # NEW SECTION: EVALUATION SUMMARY NOTE, CONCLUSION & RECRUITER SUGGESTIONS
+                # EVALUATION SUMMARY NOTE, CONCLUSION & RECRUITER SUGGESTIONS
                 # ------------------------------------------------------------------
                 st.markdown("---")
                 st.header("📝 Evaluation Summary Note, Conclusion & Recruiter Suggestions")
                 
-                # Dynamic Logic for Suggestions & Conclusion based on Score & Failures
                 failed_rules = [r_name for r_name, r_data in rule_evals.items() if "fail" in str(r_data.get("result", "")).lower()]
                 
                 if overall_score >= 80:
@@ -538,10 +586,44 @@ if st.button("🚀 Run Universal Batched Evaluation", type="primary", use_contai
                 st.markdown(f"""
                 1. **Next Step:** {action_suggestion}
                 2. **Missing/Weak Areas to Probe:** {', '.join(failed_rules) if failed_rules else 'None identified. All evaluated criteria passed successfully.'}
-                3. **Suggested Communication Strategy:** 
-                   - *If skills are missing despite experience:* Request an updated CV from the candidate with explicit mention of the required technology stack.
-                   - *If strong fit:* Send out interview availability slots promptly.
                 """)
+
+                # ------------------------------------------------------------------
+                # EMAIL DISPATCH SECTION WITH ANY RECIPIENT INPUT
+                # ------------------------------------------------------------------
+                st.markdown("---")
+                st.subheader("📧 Send Evaluation Summary Note to Any Recipient Email")
+                
+                custom_recipient_email = st.text_input(
+                    "Enter Any Recipient Email Address", 
+                    value="", 
+                    placeholder="e.g., hiring-manager@company.com or candidate@example.com",
+                    key="custom_recipient"
+                )
+                
+                if st.button("📤 Send Email to Recipient", type="primary"):
+                    if not sender_email_input or not sender_password_input:
+                        st.error("Please configure Sender Gmail Address and App Password in the sidebar settings first.")
+                    elif not custom_recipient_email.strip():
+                        st.warning("Please enter a valid recipient email address.")
+                    else:
+                        with st.spinner(f"Sending email to {custom_recipient_email}..."):
+                            success, msg_res = send_recruiter_email(
+                                sender_email=sender_email_input,
+                                sender_password=sender_password_input,
+                                recipient_email=custom_recipient_email.strip(),
+                                candidate_name=candidate_name,
+                                overall_score=overall_score,
+                                recommendation=rec,
+                                conclusion_status=conclusion_status,
+                                action_suggestion=action_suggestion,
+                                failed_rules=failed_rules,
+                                total_exp=det_analysis['total_experience_years']
+                            )
+                            if success:
+                                st.success(f"✅ Email sent successfully to **{custom_recipient_email.strip()}**!")
+                            else:
+                                st.error(f"❌ Failed to send email: {msg_res}")
 
 # ------------------------------------------------------------------------------
 # AUDIT TRAIL LOGS
