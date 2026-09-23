@@ -4,6 +4,7 @@ import json
 import sqlite3
 import datetime
 import io
+import fitz  # PyMuPDF - Added missing import
 import docx
 import pandas as pd
 import streamlit as st
@@ -24,7 +25,7 @@ STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDS = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "qwen/qwen3.8-27b"  # Verified available model ID
-LOGIC_VERSION = "v8.5-No-Email"
+LOGIC_VERSION = "v8.6-Fix-Fitz-Import"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
 os.makedirs(STORAGE_JDS, exist_ok=True)
