@@ -28,7 +28,7 @@ STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDS = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "qwen/qwen3.8-27b"  # Verified available model ID
-LOGIC_VERSION = "v8.3-Universal-Any-Email-Recipient"
+LOGIC_VERSION = "v8.4-Office365-Any-Recipient"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
 os.makedirs(STORAGE_JDS, exist_ok=True)
@@ -230,7 +230,7 @@ def generate_word_report(candidate_name, recruiter_id, overall_score, recommenda
     return bio
 
 # ------------------------------------------------------------------------------
-# EMAIL SENDER FUNCTION
+# OFFICE 365 EMAIL SENDER FUNCTION
 # ------------------------------------------------------------------------------
 def send_recruiter_email(sender_email, sender_password, recipient_email, candidate_name, overall_score, recommendation, conclusion_status, action_suggestion, failed_rules, total_exp):
     try:
@@ -262,12 +262,13 @@ Enterprise Evaluation System
 """
         msg.attach(MIMEText(body, 'plain'))
 
-        server = smtplib.SMTP('smtp.gmail.com', 587)
+        # Office 365 SMTP Server Connection
+        server = smtplib.SMTP('smtp.office365.com', 587)
         server.starttls()
         server.login(sender_email, sender_password)
         server.sendmail(sender_email, recipient_email, msg.as_string())
         server.quit()
-        return True, "Email sent successfully!"
+        return True, "Email sent successfully via Office 365!"
     except Exception as e:
         return False, str(e)
 
@@ -277,7 +278,7 @@ Enterprise Evaluation System
 st.set_page_config(page_title="Universal Enterprise Candidate Evaluator", layout="wide")
 
 st.title("⚡ Universal Enterprise Candidate Evaluation System")
-st.caption("Domain-Independent Engine + AI Batching Analysis + Word Export + Any Recipient Email Dispatch")
+st.caption("Domain-Independent Engine + AI Batching Analysis + Word Export + Office 365 Email Dispatch")
 
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = [
@@ -290,12 +291,12 @@ if "custom_rules" not in st.session_state:
 
 with st.sidebar:
     st.header("🔐 Security & Credentials")
-    evaluator_id = st.text_input("Evaluator / User ID", value="asrafshaikh86@gmail.com")
+    evaluator_id = st.text_input("Evaluator / User ID", value="alatifbhai@apexsystems")
     
     st.markdown("---")
-    st.subheader("📧 Sender SMTP Settings (Your Gmail)")
-    sender_email_input = st.text_input("Sender Gmail Address", value="asrafshaikh86@gmail.com")
-    sender_password_input = st.text_input("Gmail App Password", type="password", help="Use Google App Password from your Google account security settings")
+    st.subheader("📧 Office 365 SMTP Settings")
+    sender_email_input = st.text_input("Sender Email Address", value="alatifbhai@apexsystems")
+    sender_password_input = st.text_input("Office 365 Password / App Password", type="password", help="Use your Office 365 password or App Password if MFA is enforced")
 
     groq_api_key = ""
     try:
@@ -603,11 +604,11 @@ if st.button("🚀 Run Universal Batched Evaluation", type="primary", use_contai
                 
                 if st.button("📤 Send Email to Recipient", type="primary"):
                     if not sender_email_input or not sender_password_input:
-                        st.error("Please configure Sender Gmail Address and App Password in the sidebar settings first.")
+                        st.error("Please configure Sender Email Address and Password in the sidebar settings first.")
                     elif not custom_recipient_email.strip():
                         st.warning("Please enter a valid recipient email address.")
                     else:
-                        with st.spinner(f"Sending email to {custom_recipient_email}..."):
+                        with st.spinner(f"Sending email via Office 365 to {custom_recipient_email}..."):
                             success, msg_res = send_recruiter_email(
                                 sender_email=sender_email_input,
                                 sender_password=sender_password_input,
@@ -621,7 +622,7 @@ if st.button("🚀 Run Universal Batched Evaluation", type="primary", use_contai
                                 total_exp=det_analysis['total_experience_years']
                             )
                             if success:
-                                st.success(f"✅ Email sent successfully to **{custom_recipient_email.strip()}**!")
+                                st.success(f"✅ Email sent successfully via Office 365 to **{custom_recipient_email.strip()}**!")
                             else:
                                 st.error(f"❌ Failed to send email: {msg_res}")
 
