@@ -353,7 +353,7 @@ Return ONLY valid JSON format containing the evaluations for these specific rule
   "Rule Evaluations": {{
     "Rule Name": {{"result": "Pass/Fail", "confidence": "90%", "reasoning": "Short objective explanation under 15 words."}}
   }}
-}
+}}
 """
 
     headers = {
