@@ -4,7 +4,7 @@ import json
 import sqlite3
 import datetime
 import io
-import fitz  # PyMuPDF - Added missing import
+import fitz  # PyMuPDF
 import docx
 import pandas as pd
 import streamlit as st
@@ -25,7 +25,7 @@ STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDS = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "qwen/qwen3.8-27b"  # Verified available model ID
-LOGIC_VERSION = "v8.6-Fix-Fitz-Import"
+LOGIC_VERSION = "v8.7-Audit-Download-Fix"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
 os.makedirs(STORAGE_JDS, exist_ok=True)
@@ -353,7 +353,7 @@ Return ONLY valid JSON format containing the evaluations for these specific rule
   "Rule Evaluations": {{
     "Rule Name": {{"result": "Pass/Fail", "confidence": "90%", "reasoning": "Short objective explanation under 15 words."}}
   }}
-}}
+}
 """
 
     headers = {
@@ -539,13 +539,51 @@ if st.button("🚀 Run Universal Batched Evaluation", type="primary", use_contai
                 """)
 
 # ------------------------------------------------------------------------------
-# AUDIT TRAIL LOGS
+# AUDIT TRAIL LOGS WITH DIRECT CV/JD DOWNLOAD
 # ------------------------------------------------------------------------------
 st.markdown("---")
 st.header("📋 Complete Audit Trail & History")
-conn = sqlite3.connect(DB_PATH)
-df_audit = pd.read_sql_query("SELECT id, timestamp, recruiter_id, candidate_name, overall_score, recommendation, model_version, logic_version FROM evaluations ORDER BY id DESC", conn)
-conn.close()
-if not df_audit.empty:
-    st.dataframe(df_audit, use_container_width=True)
 
+conn = sqlite3.connect(DB_PATH)
+cursor = conn.cursor()
+cursor.execute("SELECT id, timestamp, recruiter_id, candidate_name, overall_score, recommendation, cv_file_path, jd_file_path, model_version, logic_version FROM evaluations ORDER BY id DESC")
+rows = cursor.fetchall()
+conn.close()
+
+if rows:
+    for row in rows:
+        eval_id, timestamp, rec_id, cand_name, score, rec, cv_path, jd_path, model_v, logic_v = row
+        
+        with st.expander(f"Record #{eval_id} | {cand_name} - Score: {score}/100 ({timestamp})"):
+            c1, c2, c3 = st.columns(3)
+            c1.write(f"**Recruiter:** {rec_id}")
+            c2.write(f"**Recommendation:** {rec}")
+            c3.write(f"**Model:** {model_v}")
+            
+            d_col1, d_col2 = st.columns(2)
+            
+            # CV Download Option
+            if cv_path and os.path.exists(cv_path):
+                with open(cv_path, "rb") as f_cv:
+                    d_col1.download_button(
+                        label=f"📥 Download CV ({os.path.basename(cv_path)})",
+                        data=f_cv,
+                        file_name=os.path.basename(cv_path),
+                        key=f"audit_cv_{eval_id}"
+                    )
+            else:
+                d_col1.text("CV file path not found on server.")
+                
+            # JD Download Option
+            if jd_path and os.path.exists(jd_path):
+                with open(jd_path, "rb") as f_jd:
+                    d_col2.download_button(
+                        label=f"📥 Download JD ({os.path.basename(jd_path)})",
+                        data=f_jd,
+                        file_name=os.path.basename(jd_path),
+                        key=f"audit_jd_{eval_id}"
+                    )
+            else:
+                d_col2.text("JD file path not found on server.")
+else:
+    st.info("No evaluation history found in audit trail.")
