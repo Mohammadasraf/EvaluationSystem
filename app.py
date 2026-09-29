@@ -23,13 +23,13 @@ except ImportError:
 # CONFIGURATION & CONSTANTS
 # ------------------------------------------------------------------------------
 STORAGE_CVS = os.path.join("storage", "CVs")
-STORAGE_JDS = os.path.join("storage", "JDs")
+STORAGE_JDs = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.15-Practical-PartialMatch-Enhanced"
+LOGIC_VERSION = "v10.16-Guardrail-Deterministic-Enforced"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
-os.makedirs(STORAGE_JDS, exist_ok=True)
+os.makedirs(STORAGE_JDs, exist_ok=True)
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT
@@ -104,29 +104,55 @@ def save_archived_file(uploaded_file, folder: str, prefix: str) -> str:
     return file_path
 
 # ------------------------------------------------------------------------------
-# GLOBAL LLM EXTRACTION WITH BULLETPROOF REPAIR & CLEAN FALLBACK
+# DETERMINISTIC JD & CV PARSING HELPERS
 # ------------------------------------------------------------------------------
+def extract_jd_requirements(jd_text: str, groq_api_key: str) -> dict:
+    """Extracts structured requirements (like min experience years) from JD deterministically via LLM."""
+    system_prompt = "Extract key quantitative criteria from the Job Description into strict JSON. Return ONLY JSON."
+    user_prompt = f"""
+Analyze this Job Description and extract:
+1. "minimum_experience_years": float number representing minimum years required (e.g., 6.0 for 6 years). If not specified, return 0.0.
+
+JD TEXT:
+{jd_text}
+
+Return JSON:
+{{
+  "minimum_experience_years": 0.0
+}}
+"""
+    try:
+        client = Groq(api_key=groq_api_key.strip())
+        completion = client.chat.completions.create(
+            model=MODEL_VERSION,
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+            temperature=0.0,
+            max_tokens=200
+        )
+        content = completion.choices[0].message.content.strip()
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+        parsed = json.loads(repair_json(content))
+        return {"minimum_experience_years": float(parsed.get("minimum_experience_years", 0.0) or 0.0)}
+    except Exception:
+        # Fallback regex search for years
+        match = re.search(r'(\d+)\+?\s*years?', jd_text, re.IGNORECASE)
+        val = float(match.group(1)) if match else 0.0
+        return {"minimum_experience_years": val}
+
 def extract_comprehensive_profile_details(cv_text: str, groq_api_key: str) -> dict:
     current_date_str = datetime.datetime.now().strftime("%B %Y")
     
     system_prompt = (
-        "You are an expert global HR data extraction and professional tenure calculation engine. "
-        "You can parse resumes from any country, format, or layout worldwide. "
-        "Your task is to meticulously identify all employment start and end dates, "
-        "calculate exact full-time professional experience, internships, gaps, and education timelines. "
-        "Always output strictly valid JSON matching the requested format without markdown wrappers."
+        "You are an expert global HR data extraction engine. "
+        "Calculate exact full-time professional experience, internships, and timeline data. "
+        "Always output strictly valid JSON without markdown wrappers."
     )
     
     user_prompt = f"""
-Today's current date is {current_date_str}. Analyze the candidate resume text globally and universally.
-
-Instructions for global calculation:
-1. "internship_experience_years": Sum up all types of internships in years as a float. If none, 0.0.
-2. "fulltime_experience_years": Compute total professional full-time working experience in years as a float.
-3. "total_experience_years": The precise sum of full-time experience and internship experience as a float.
-4. "experience_gaps": Identify significant unexplained employment gaps. If none, return ["No major experience gaps found"].
-5. "education_gaps": Identify major unexplained gaps in education. If none, return ["No education gaps found"].
-6. "education_to_job_gap": Calculate the time gap between finishing education and starting the first professional career role.
+Today's current date is {current_date_str}. Analyze the candidate resume text globally.
 
 Return ONLY valid JSON matching this exact structure:
 {{
@@ -146,26 +172,17 @@ Return ONLY valid JSON matching this exact structure:
         client = Groq(api_key=groq_api_key.strip())
         completion = client.chat.completions.create(
             model=MODEL_VERSION,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
             temperature=0.0,
             max_tokens=1500
         )
-        
-        if not completion or not completion.choices or not completion.choices[0].message.content:
-            raise ValueError("Empty completion string received")
-            
         content = completion.choices[0].message.content.strip()
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
             content = content.split("```")[1].split("```")[0].strip()
             
-        fixed_json_str = repair_json(content)
-        parsed = json.loads(fixed_json_str)
-        
+        parsed = json.loads(repair_json(content))
         fulltime = float(parsed.get("fulltime_experience_years", 0.0) or 0.0)
         internship = float(parsed.get("internship_experience_years", 0.0) or 0.0)
         total = float(parsed.get("total_experience_years", 0.0) or (fulltime + internship))
@@ -178,7 +195,7 @@ Return ONLY valid JSON matching this exact structure:
             "education_gaps": parsed.get("education_gaps", ["No education gaps found"]),
             "education_to_job_gap": parsed.get("education_to_job_gap", "N/A")
         }
-    except Exception as e:
+    except Exception:
         return {
             "internship_experience_years": 0.0,
             "fulltime_experience_years": 0.0,
@@ -244,11 +261,11 @@ def generate_word_report(candidate_name, recruiter_id, overall_score, recommenda
 st.set_page_config(page_title="Universal Enterprise Candidate Evaluator", layout="wide")
 
 st.title("⚡ Universal Enterprise Candidate Evaluation System")
-st.caption("LLM-Powered Precision Extraction + Smart Partial-Match Rules + Word Export")
+st.caption("LLM Precision + Deterministic Guardrails + Word Export")
 
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = [
-        {"id": 1, "name": "Technical & Domain Competency", "type": "AI Evaluation", "criteria": "Candidate possesses required technical stack/skills mentioned in JD. (Note: Allow partial match if core technology stack is strong and only secondary tools/monitoring apps are missing)."},
+        {"id": 1, "name": "Technical & Domain Competency", "type": "AI Evaluation", "criteria": "Candidate possesses required technical stack/skills mentioned in JD. (Allow partial match if core stack is strong and secondary tools are missing)."},
         {"id": 2, "name": "Work Experience", "type": "Deterministic", "criteria": "Meets or exceeds minimum required professional experience."},
         {"id": 3, "name": "Project Relevance", "type": "AI Evaluation", "criteria": "Previous project exposure aligns with job responsibilities."},
         {"id": 4, "name": "Career Stability", "type": "Deterministic", "criteria": "No unexplained erratic career switches or major gaps."},
@@ -302,7 +319,7 @@ with col_jd:
 
 with col_cv:
     st.subheader("👤 Candidate Resume (CV)")
-    candidate_name = st.text_input("Candidate Full Name", value="Mohammadasraf Shaikh")
+    candidate_name = st.text_input("Candidate Full Name", value="Candidate Name")
     cv_input_type = st.radio("CV Input Method", ["File Upload", "Paste Text"], key="cv_type")
     cv_text = ""
     cv_file = None
@@ -348,79 +365,81 @@ st.session_state.custom_rules = rules_to_keep
 st.markdown("---")
 
 # ------------------------------------------------------------------------------
-# BATCHED EVALUATION ENGINE WITH SMART PARTIAL MATCH LOGIC
+# EVALUATION & GUARDRAIL ENGINE
 # ------------------------------------------------------------------------------
 def evaluate_batch_chunk(cv_text, jd_text, rule_chunk, groq_api_key):
     system_prompt = (
-        "You are an expert, pragmatic enterprise HR AI evaluator. "
-        "Evaluate rules using three potential result statuses: 'Pass', 'Partial Match', or 'Fail'. "
-        "IMPORTANT GUIDELINE: Do NOT mark a rule as 'Fail' simply because secondary auxiliary tools, third-party libraries, or monitoring applications (e.g., Dynatrace, specific niche plugins) mentioned in the JD are absent in the resume, provided the core technical background, core language, and years of experience align well. In such cases, mark it as 'Partial Match'. "
-        "Return ONLY valid JSON format matching the requested structure with no markdown code blocks."
+        "You are an expert HR AI evaluator. "
+        "Evaluate rules using three statuses: 'Pass', 'Partial Match', or 'Fail'. "
+        "Return ONLY valid JSON format matching the requested structure without markdown code blocks."
     )
     
     user_prompt = f"""
-Evaluate the candidate against the provided sub-set of rules pragmatically based strictly on the JD and Resume provided.
+Evaluate the candidate against the rules subset.
 
 --- JOB DESCRIPTION ---
 {jd_text}
 
---- RULES SUB-SET TO EVALUATE ---
+--- RULES SUBSET ---
 {json.dumps(rule_chunk, indent=2)}
 
 --- RESUME ---
 {cv_text}
 
-Return ONLY valid JSON matching this exact structure:
+Return ONLY valid JSON:
 {{
   "Rule Evaluations": {{
     "Rule Name": {{"result": "Pass / Partial Match / Fail", "confidence": "90%", "reasoning": "Short objective explanation under 15 words."}}
   }}
 }}
 """
-
     try:
         client = Groq(api_key=groq_api_key.strip())
         completion = client.chat.completions.create(
             model=MODEL_VERSION,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
             temperature=0.1,
             max_tokens=1000
         )
-        if not completion or not completion.choices:
-            raise ValueError("Empty completion chunk")
-            
-        content = completion.choices[0].message.content
-        if not content or not content.strip():
-            raise ValueError("Empty response text")
-        
-        content = content.strip()
+        content = completion.choices[0].message.content.strip()
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
             content = content.split("```")[1].split("```")[0].strip()
             
-        fixed_json_str = repair_json(content)
-        parsed_data = json.loads(fixed_json_str)
-        
+        parsed_data = json.loads(repair_json(content))
         if "Rule Evaluations" not in parsed_data:
             parsed_data = {"Rule Evaluations": parsed_data}
-            
         return parsed_data
-        
-    except Exception as e:
-        fallback_evals = {}
-        for rule in rule_chunk:
-            fallback_evals[rule['name']] = {
-                "result": "Pass", 
-                "confidence": "50%", 
-                "reasoning": f"Auto-recovered via safe fallback routine."
-            }
+    except Exception:
+        fallback_evals = {rule['name']: {"result": "Pass", "confidence": "50%", "reasoning": "Fallback recovered."} for rule in rule_chunk}
         return {"Rule Evaluations": fallback_evals}
 
+def apply_deterministic_guardrails(jd_analysis, det_analysis, combined_rule_evals, overall_score, recommendation):
+    """Deterministic hard gatekeeper check to enforce experience requirements."""
+    min_req_exp = float(jd_analysis.get('minimum_experience_years', 0.0))
+    candidate_tot_exp = float(det_analysis.get('total_experience_years', 0.0))
+    
+    if min_req_exp > 0.0 and candidate_tot_exp < min_req_exp:
+        recommendation = "Reject"
+        overall_score = min(overall_score, 40.0)
+        
+        # Override Work Experience rule to Fail
+        for r_name in combined_rule_evals:
+            if "experience" in r_name.lower() or "work" in r_name.lower():
+                combined_rule_evals[r_name] = {
+                    "result": "Fail",
+                    "confidence": "100%",
+                    "reasoning": f"Hard check: Candidate experience ({candidate_tot_exp}y) is less than JD requirement ({min_req_exp}y)."
+                }
+        summary = f"Candidate failed hard experience requirement (Required: {min_req_exp}y, Found: {candidate_tot_exp}y)."
+    else:
+        summary = "Candidate met required thresholds."
+        
+    return combined_rule_evals, overall_score, recommendation, summary
+
 def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
+    jd_analysis = extract_jd_requirements(jd_text, groq_api_key)
     profile_details = extract_comprehensive_profile_details(cv_text, groq_api_key)
     evidence_map = extract_universal_evidence(cv_text)
 
@@ -442,18 +461,20 @@ def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
             if "pass" in res_str and "partial" not in res_str:
                 score_points += 1.0
             elif "partial" in res_str:
-                score_points += 0.7  # Partial match gets weighted credit instead of zero!
+                score_points += 0.7
 
     overall_score = round((score_points / max(total_rules, 1)) * 100, 1)
     if overall_score >= 80:
         recommendation = "Strong Hire"
-        summary = "Candidate successfully met the vast majority of evaluated criteria."
     elif overall_score >= 40:
         recommendation = "Consider / Request Updated CV"
-        summary = "Candidate met several criteria or has partial/transferable background requiring resume refinement."
     else:
         recommendation = "Reject"
-        summary = "Candidate fell short on critical rule thresholds."
+
+    # APPLY DETERMINISTIC GUARDRAILS HERE
+    combined_rule_evals, overall_score, recommendation, summary = apply_deterministic_guardrails(
+        jd_analysis, det_analysis, combined_rule_evals, overall_score, recommendation
+    )
 
     final_output = {
         "Rule Evaluations": combined_rule_evals,
@@ -470,7 +491,7 @@ if st.button("🚀 Run Precision Evaluation", type="primary", use_container_widt
     elif not cv_text or not jd_text:
         st.warning("Please provide both JD and Candidate Resume.")
     else:
-        with st.spinner("Extracting precise global profile timeline, experience, and running evaluation..."):
+        with st.spinner("Extracting profile timeline, running deterministic checks, and evaluating rules..."):
             cv_path = save_archived_file(cv_file, STORAGE_CVS, "CV") if cv_file else "Pasted Text"
             jd_path = save_archived_file(jd_file, STORAGE_JDS, "JD") if jd_file else "Pasted Text"
 
@@ -496,7 +517,7 @@ if st.button("🚀 Run Precision Evaluation", type="primary", use_container_widt
                 overall_score,
                 rec,
                 rec,
-                "Automated Precision Evaluation",
+                "Automated Guardrail Evaluation",
                 cv_path,
                 jd_path,
                 json.dumps(st.session_state.custom_rules),
@@ -517,7 +538,7 @@ if st.button("🚀 Run Precision Evaluation", type="primary", use_container_widt
                 "rule_evals": rule_evals,
                 "evidence_map": evidence_map
             }
-            st.success("Evaluation completed successfully with global precision extraction!")
+            st.success("Evaluation completed with deterministic guardrails applied!")
 
 # ------------------------------------------------------------------------------
 # RENDER UI RESULTS FROM SESSION STATE
@@ -542,23 +563,22 @@ if st.session_state.evaluation_results is not None:
         type="primary"
     )
 
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Overall Match Score", f"{overall_score} / 100")
-    m2.metric("AI Recommendation", rec)
-    m3.metric("Full-Time Exp", f"{det_analysis.get('fulltime_experience_years', 0.0)} Yrs")
-    m4.metric("Intern Exp", f"{det_analysis.get('internship_experience_years', 0.0)} Yrs")
-    m5.metric("Total Experience", f"{det_analysis.get('total_experience_years', 0.0)} Yrs")
+    if "Strong Hire" in rec:
+        st.success(f"📌 **AI Recommendation:** {rec}")
+    elif "Consider" in rec:
+        st.warning(f"📌 **AI Recommendation:** {rec}")
+    else:
+        st.error(f"📌 **AI Recommendation:** {rec}")
 
-    st.markdown("### 🔍 Career & Education Gaps Breakdown")
-    g1, g2 = st.columns(2)
-    with g1:
-        st.markdown("**Experience Gaps:**")
-        for eg in det_analysis.get('experience_gaps', ['None']):
-            st.write(f"- {eg}")
-    with g2:
-        st.markdown("**Education Gaps:**")
-        for edg in det_analysis.get('education_gaps', ['None']):
-            st.write(f"- {edg}")
+    ft_exp = round(float(det_analysis.get('fulltime_experience_years', 0.0)), 1)
+    in_exp = round(float(det_analysis.get('internship_experience_years', 0.0)), 1)
+    tot_exp = round(float(det_analysis.get('total_experience_years', 0.0)), 1)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Overall Match Score", f"{overall_score} / 100")
+    m2.metric("Full-Time Exp", f"{ft_exp} Yrs")
+    m3.metric("Intern Exp", f"{in_exp} Yrs")
+    m4.metric("Total Experience", f"{tot_exp} Yrs")
 
     st.markdown("### 📊 Universal Evaluation Matrix & Confidence")
     grid = []
@@ -570,37 +590,6 @@ if st.session_state.evaluation_results is not None:
             "Reasoning": r_data.get("reasoning")
         })
     st.table(pd.DataFrame(grid))
-
-    st.markdown("---")
-    st.header("📝 Evaluation Summary Note, Conclusion & Recruiter Suggestions")
-    
-    partial_or_failed = [r_name for r_name, r_data in rule_evals.items() if any(k in str(r_data.get("result", "")).lower() for k in ["fail", "partial"])]
-    
-    if overall_score >= 80:
-        conclusion_status = "✅ High Potential / Ready for Interview"
-        action_suggestion = "Proceed directly to technical or HR interview rounds. Candidate demonstrates strong alignment with job requirements."
-    elif overall_score >= 40:
-        conclusion_status = "⚠️ Moderate Match / Partial Skill Alignment"
-        if partial_or_failed:
-            action_suggestion = (
-                f"Candidate shows strong transferable experience or core expertise, but specific secondary tools or skills "
-                f"({', '.join(partial_or_failed)}) resulted in partial matches or are unlisted. "
-                f"\n\n💡 **Recruiter Action Advice:** Do not reject. **Ask the candidate to update and resend their CV** "
-                f"highlighting any experience with these secondary tools if applicable."
-            )
-        else:
-            action_suggestion = "Candidate meets basic criteria but requires a quick screening call to verify depth of experience."
-    else:
-        conclusion_status = "❌ Low Alignment / Not Recommended"
-        action_suggestion = "Significant gaps found against core JD requirements. Recommend sending a polite rejection notice."
-
-    st.info(f"**Conclusion Status:** {conclusion_status}\n\n**Overall Score:** {overall_score}/100 | **Total Experience:** {det_analysis.get('total_experience_years', 0.0)} Years | **Education-to-Job Gap:** {det_analysis.get('education_to_job_gap', 'N/A')}")
-    
-    st.markdown("#### 💡 Actionable Suggestions for Recruiter")
-    st.markdown(f"""
-    1. **Next Step:** {action_suggestion}
-    2. **Areas to Probe / Request Update:** {', '.join(partial_or_failed) if partial_or_failed else 'None identified. All evaluated criteria passed successfully.'}
-    """)
 
 # ------------------------------------------------------------------------------
 # AUDIT TRAIL LOGS
@@ -617,35 +606,8 @@ conn.close()
 if rows:
     for row in rows:
         eval_id, timestamp, rec_id, cand_name, score, rec, cv_path, jd_path, model_v, logic_v = row
-        
         with st.expander(f"Record #{eval_id} | {cand_name} - Score: {score}/100 ({timestamp})"):
             c1, c2, c3 = st.columns(3)
             c1.write(f"**Recruiter:** {rec_id}")
             c2.write(f"**Recommendation:** {rec}")
             c3.write(f"**Model:** {model_v}")
-            
-            d_col1, d_col2 = st.columns(2)
-            
-            if cv_path and os.path.exists(cv_path):
-                with open(cv_path, "rb") as f_cv:
-                    d_col1.download_button(
-                        label=f"📥 Download CV ({os.path.basename(cv_path)})",
-                        data=f_cv,
-                        file_name=os.path.basename(cv_path),
-                        key=f"audit_cv_{eval_id}"
-                    )
-            else:
-                d_col1.text("CV file path not found on server.")
-                
-            if jd_path and os.path.exists(jd_path):
-                with open(jd_path, "rb") as f_jd:
-                    d_col2.download_button(
-                        label=f"📥 Download JD ({os.path.basename(jd_path)})",
-                        data=f_jd,
-                        file_name=os.path.basename(jd_path),
-                        key=f"audit_jd_{eval_id}"
-                    )
-            else:
-                d_col2.text("JD file path not found on server.")
-else:
-    st.info("No evaluation history found in audit trail.")
