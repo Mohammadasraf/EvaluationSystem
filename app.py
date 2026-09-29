@@ -24,8 +24,8 @@ except ImportError:
 STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDS = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
-MODEL_VERSION = "llama-3.3-70b-versatile"  # Validated Groq Production Model
-LOGIC_VERSION = "v10.1-Precision-Experience-UI"
+MODEL_VERSION = "llama-3.1-8b-instant"  # Updated to universally supported Groq Model
+LOGIC_VERSION = "v10.2-Precision-Experience-UI"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
 os.makedirs(STORAGE_JDS, exist_ok=True)
