@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.29-In-Memory-UniversalAccurate"
+LOGIC_VERSION = "v10.30-In-Memory-CleanGaps"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
@@ -152,9 +152,8 @@ def extract_comprehensive_profile_details(cv_text: str, groq_api_key: str) -> di
     
     system_prompt = (
         "You are an expert global HR data extraction and timeline calculation engine. "
-        "Analyze the provided resume text thoroughly whether it is uploaded or pasted. "
         "Calculate exact full-time professional experience, internships, experience gaps, education gaps, and the education-to-job transition gap based on actual dates found in the text. "
-        "Do not use hardcoded or assumed values. If no gap or experience exists, return 0.0 or standard clean text ('No major experience gaps found'). "
+        "For experience gaps, provide clear details if present. "
         "Always output strictly valid JSON without markdown wrappers."
     )
     
@@ -166,8 +165,8 @@ Return ONLY valid JSON matching this exact structure:
   "internship_experience_years": 0.0,
   "fulltime_experience_years": 0.0,
   "total_experience_years": 0.0,
-  "experience_gaps": ["No major experience gaps found"],
-  "education_gaps": ["No education gaps found"],
+  "experience_gaps": [],
+  "education_gaps": [],
   "education_to_job_gap": "N/A"
 }}
 
@@ -646,7 +645,14 @@ if st.session_state.evaluation_results is not None:
         exp_gaps_list = det_analysis.get("experience_gaps", ["No major experience gaps found"])
         if isinstance(exp_gaps_list, list) and len(exp_gaps_list) > 0:
             for gap in exp_gaps_list:
-                st.markdown(f"- {gap}")
+                if isinstance(gap, dict):
+                    start = gap.get('gap_start', '')
+                    end = gap.get('gap_end', '')
+                    duration = gap.get('duration_months', '')
+                    gap_text = f"Gap from {start} to {end} ({duration} months)"
+                    st.markdown(f"- {gap_text}")
+                else:
+                    st.markdown(f"- {gap}")
         else:
             st.markdown("- No major experience gaps found")
             
@@ -658,8 +664,16 @@ if st.session_state.evaluation_results is not None:
         
         if isinstance(edu_gaps_list, list) and len(edu_gaps_list) > 0:
             for gap in edu_gaps_list:
-                if str(gap).strip().lower() != str(edu_to_job_raw).strip().lower():
-                    st.markdown(f"- {gap}")
+                if isinstance(gap, dict):
+                    start = gap.get('gap_start', '')
+                    end = gap.get('gap_end', '')
+                    duration = gap.get('duration_months', '')
+                    gap_text = f"Gap from {start} to {end} ({duration} months)"
+                    if str(gap_text).strip().lower() != str(edu_to_job_raw).strip().lower():
+                        st.markdown(f"- {gap_text}")
+                else:
+                    if str(gap).strip().lower() != str(edu_to_job_raw).strip().lower():
+                        st.markdown(f"- {gap}")
         
         st.metric(label="Education-to-Job Transition Gap", value=edu_to_job_formatted)
 
