@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.42-Accurate-Education-Gap-Fix"
+LOGIC_VERSION = "v10.43-Exact-Education-Gap-Calculation"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
@@ -179,30 +179,37 @@ def calculate_deterministic_timeline(cv_text: str) -> dict:
         calculated_total_years = extract_experience_via_regex(cv_text)
         fulltime_months = int(calculated_total_years * 12)
 
-    # --- ACCURATE EDUCATION END DATE PARSING ---
-    # Look specifically for education section range end date (e.g., Jun 2016 – Aug 2020 -> picks Aug 2020)
+    # --- ACCURATE EDUCATION END DATE PARSING & EXACT GAP CALCULATION ---
     edu_end_date = None
     edu_section_match = re.search(r'(education|b\.?tech|b\.?e\.?|graduation).*?(20\d{2})', cleaned_cv, re.IGNORECASE)
     if edu_section_match:
-        # Search for all date ranges within 300 chars of education keyword
         edu_pos = cleaned_cv.lower().find('education')
         if edu_pos == -1:
             edu_pos = 0
         edu_subtext = cleaned_cv[edu_pos:edu_pos + 400]
         sub_ranges = re.findall(r'([A-Za-z]+\s*\d{2,4})\s*[\–\-\to]\s*([A-Za-z]+\s*\d{2,4})', edu_subtext)
         if sub_ranges:
-            # Take the end date of the last matched range in education section
             edu_end_date = parse_date_str(sub_ranges[-1][1])
 
-    education_to_job_gap_str = "Seamless Transition"
+    education_to_job_gap_str = "0 Months (Seamless)"
     if edu_end_date and work_periods:
         first_work_start = work_periods[0][0]
         if first_work_start > edu_end_date:
-            gap_months = (first_work_start.year - edu_end_date.year) * 12 + (first_work_start.month - edu_end_date.month) - 1
-            if gap_months >= 2:
-                education_to_job_gap_str = f"{gap_months} Months Gap"
+            total_gap_months = (first_work_start.year - edu_end_date.year) * 12 + (first_work_start.month - edu_end_date.month)
+            
+            if total_gap_months > 0:
+                years = total_gap_months // 12
+                months = total_gap_months % 12
+                
+                parts = []
+                if years > 0:
+                    parts.append(f"{years} {'Year' if years == 1 else 'Years'}")
+                if months > 0:
+                    parts.append(f"{months} {'Month' if months == 1 else 'Months'}")
+                
+                education_to_job_gap_str = " ".join(parts) if parts else "0 Months"
             else:
-                education_to_job_gap_str = "Seamless Transition"
+                education_to_job_gap_str = "0 Months (Seamless)"
 
     return {
         "internship_experience_years": round(internship_months / 12.0, 1),
@@ -298,7 +305,7 @@ def generate_in_memory_word_report(candidate_name, recruiter_id, overall_score, 
     doc.add_paragraph(f"Full-Time Experience: {format_time_gap(det_analysis.get('fulltime_experience_years', 0.0))}")
     doc.add_paragraph(f"Internship Experience: {format_time_gap(det_analysis.get('internship_experience_years', 0.0))}")
     doc.add_paragraph(f"Calculated Total Experience: {format_time_gap(det_analysis.get('total_experience_years', 0.0))}")
-    doc.add_paragraph(f"Education-to-Job Gap: {format_time_gap(det_analysis.get('education_to_job_gap', 'Seamless Transition'))}")
+    doc.add_paragraph(f"Education-to-Job Gap: {det_analysis.get('education_to_job_gap', '0 Months')}")
     
     doc.add_heading("3. Evaluation Rules Matrix", level=1)
     table = doc.add_table(rows=1, cols=4)
@@ -616,7 +623,7 @@ if st.button("🚀 Run Deterministic Precision Evaluation", type="primary", use_
                 "summary": summary_text,
                 "word_file_io": word_file_io
             }
-            st.success("Evaluation completed successfully with deterministic math calculation!")
+            st.success("Evaluation completed successfully with exact calculation display!")
 
 # ------------------------------------------------------------------------------
 # RENDER UI RESULTS FROM SESSION STATE
@@ -664,7 +671,7 @@ if st.session_state.evaluation_results is not None:
         next_step_msg = "Significant gaps found against core JD requirements. Recommend sending a polite rejection notice."
 
     tot_exp_formatted = format_time_gap(det_analysis.get('total_experience_years', 0.0))
-    edu_gap_formatted = format_time_gap(det_analysis.get('education_to_job_gap', 'Seamless Transition'))
+    edu_gap_formatted = det_analysis.get('education_to_job_gap', '0 Months')
 
     st.info(
         f"**Conclusion Status:** {conclusion_html}\n\n"
@@ -704,9 +711,8 @@ if st.session_state.evaluation_results is not None:
             
     with col_g2:
         st.markdown("#### 🎓 Education & Transition Gaps")
-        edu_to_job_raw = det_analysis.get("education_to_job_gap", "Seamless Transition")
-        edu_to_job_formatted = format_time_gap(edu_to_job_raw)
-        st.metric(label="Education-to-Job Transition Gap", value=edu_to_job_formatted)
+        edu_to_job_val = det_analysis.get("education_to_job_gap", "0 Months")
+        st.metric(label="Education-to-Job Transition Gap", value=edu_to_job_val)
 
     st.markdown("### 📊 Universal Evaluation Matrix & Confidence")
     grid = []
