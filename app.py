@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.38-Deterministic-Gap-Calculation"
+LOGIC_VERSION = "v10.39-Deterministic-Gap-Calculation"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
@@ -92,15 +92,15 @@ def format_time_gap(value):
 def parse_date_str(date_str):
     if not date_str:
         return None
-    date_str = date_str.strip().lower()
+    
+    # Pre-clean string to remove hidden characters, apostrophes, and normalize
+    date_str = date_str.replace("'", "").replace("'", "").replace("`", "").strip().lower()
+    
     if "present" in date_str or "current" in date_str or "till date" in date_str:
         return datetime.datetime.now()
     
-    # Simplified clean regex to prevent invisible character/syntax issues
+    # Clean regex without quote escape issues
     match = re.search(r'([a-z]+)\s*(\d{2,4})', date_str)
-    if not match:
-        match = re.search(r'([a-z]+)\s*[\''](\d{2,4})', date_str)
-        
     if match:
         month_str, year_str = match.groups()
         if len(year_str) == 2:
@@ -134,8 +134,10 @@ def extract_experience_via_regex(text: str) -> float:
     return 0.0
 
 def calculate_deterministic_timeline(cv_text: str) -> dict:
-    date_range_pattern = r'([A-Za-z]+\s*[\'']?\d{2,4})\s*[\–\-\to]\s*([A-Za-z]+\s*[\'']?\d{2,4}|Present|Current|Till Date)'
-    matches = re.findall(date_range_pattern, cv_text, re.IGNORECASE)
+    # Clean text to remove tricky apostrophes before pattern searching
+    cleaned_cv = cv_text.replace("'", "").replace("'", "")
+    date_range_pattern = r'([A-Za-z]+\s*\d{2,4})\s*[\–\-\to]\s*([A-Za-z]+\s*\d{2,4}|Present|Current|Till Date)'
+    matches = re.findall(date_range_pattern, cleaned_cv, re.IGNORECASE)
     
     total_months = 0
     internship_months = 0
@@ -147,8 +149,8 @@ def calculate_deterministic_timeline(cv_text: str) -> dict:
         end_dt = parse_date_str(end_str)
         if start_dt and end_dt and start_dt <= end_dt:
             months = (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
-            pos = cv_text.find(start_str)
-            snippet = cv_text[max(0, pos - 80): pos].lower() if pos != -1 else ""
+            pos = cleaned_cv.find(start_str)
+            snippet = cleaned_cv[max(0, pos - 80): pos].lower() if pos != -1 else ""
             
             if "intern" in snippet or "trainee" in snippet or "internship" in snippet:
                 internship_months += months
@@ -176,8 +178,8 @@ def calculate_deterministic_timeline(cv_text: str) -> dict:
         calculated_total_years = extract_experience_via_regex(cv_text)
         fulltime_months = int(calculated_total_years * 12)
 
-    edu_pattern = r'(B\.?Tech|B\.?E\.?|M\.?Tech|B\.?Sc|M\.?Sc|Graduation|Degree).*?([A-Za-z]+\s*[\'']?\d{2,4})'
-    edu_matches = re.findall(edu_pattern, cv_text, re.IGNORECASE)
+    edu_pattern = r'(B\.?Tech|B\.?E\.?|M\.?Tech|B\.?Sc|M\.?Sc|Graduation|Degree).*?([A-Za-z]+\s*\d{2,4})'
+    edu_matches = re.findall(edu_pattern, cleaned_cv, re.IGNORECASE)
     
     edu_end_date = None
     for edu_title, date_str in edu_matches:
