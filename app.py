@@ -20,18 +20,27 @@ except ImportError:
     HAS_OCR = False
 
 # ------------------------------------------------------------------------------
-# CONFIGURATION & CONSTANTS (In-Memory / No Server Disk Storage)
+# CONFIGURATION & CONSTANTS
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.22-InclusionMemory-BrowserDownload"
+LOGIC_VERSION = "v10.23-In-Memory-SafeDB"
 
 # ------------------------------------------------------------------------------
-# DATABASE INIT
+# DATABASE INIT (With Automatic Schema Alignment)
 # ------------------------------------------------------------------------------
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    
+    # Check existing table columns to avoid schema mismatch errors
+    cursor.execute("PRAGMA table_info(evaluations)")
+    columns = [row[1] for row in cursor.fetchall()]
+    
+    # If table exists but has old schema columns, drop and recreate safely
+    if columns and "cv_source_name" not in columns:
+        cursor.execute("DROP TABLE IF EXISTS evaluations")
+        
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS evaluations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -231,7 +240,6 @@ def generate_in_memory_word_report(candidate_name, recruiter_id, overall_score, 
         for snip in snippets:
             doc.add_paragraph(f'"{snip}"', style='Intense Quote')
             
-    # Return directly as BytesIO buffer for browser download
     bio = io.BytesIO()
     doc.save(bio)
     bio.seek(0)
@@ -484,12 +492,10 @@ if st.button("🚀 Run In-Memory Precision Evaluation", type="primary", use_cont
             rec = ai_results.get("Derived Recommendation", "Consider")
             summary_text = ai_results.get("AI Contextual Summary", "")
 
-            # Generate report buffer directly in memory
             word_file_io = generate_in_memory_word_report(
                 candidate_name, evaluator_id, overall_score, rec, det_analysis, rule_evals, evidence_map
             )
 
-            # Log record metadata without file paths
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             cursor.execute("""
