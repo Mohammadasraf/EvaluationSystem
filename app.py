@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.23-In-Memory-SafeDB"
+LOGIC_VERSION = "v10.24-In-Memory-SafePaste"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
@@ -33,11 +33,9 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Check existing table columns to avoid schema mismatch errors
     cursor.execute("PRAGMA table_info(evaluations)")
     columns = [row[1] for row in cursor.fetchall()]
     
-    # If table exists but has old schema columns, drop and recreate safely
     if columns and "cv_source_name" not in columns:
         cursor.execute("DROP TABLE IF EXISTS evaluations")
         
@@ -499,8 +497,8 @@ if st.button("🚀 Run In-Memory Precision Evaluation", type="primary", use_cont
         st.warning("Please provide both JD and Candidate Resume.")
     else:
         with st.spinner("Processing in-memory timeline extraction and rule evaluation..."):
-            cv_name = cv_file.name if cv_file else "Pasted Text"
-            jd_name = jd_file.name if jd_file else "Pasted Text"
+            cv_name = cv_file.name if (cv_file and hasattr(cv_file, 'name')) else "Pasted CV Text"
+            jd_name = jd_file.name if (jd_file and hasattr(jd_file, 'name')) else "Pasted JD Text"
 
             det_analysis, evidence_map, ai_results = evaluate_hybrid_system_batched(cv_text, jd_text, st.session_state.custom_rules, groq_api_key)
 
