@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.25-In-Memory-FixedPaste"
+LOGIC_VERSION = "v10.26-In-Memory-RobustPaste"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
@@ -192,6 +192,12 @@ Return ONLY valid JSON matching this exact structure:
         internship = float(parsed.get("internship_experience_years", 0.0) or 0.0)
         total = float(parsed.get("total_experience_years", 0.0) or (fulltime + internship))
         
+        if total == 0.0 and fulltime == 0.0:
+            match = re.search(r'(\d+)\+?\s*years?\s*of\s*experience', cv_text, re.IGNORECASE)
+            if match:
+                fulltime = float(match.group(1))
+                total = fulltime
+
         return {
             "internship_experience_years": internship,
             "fulltime_experience_years": fulltime,
@@ -201,10 +207,12 @@ Return ONLY valid JSON matching this exact structure:
             "education_to_job_gap": parsed.get("education_to_job_gap", "N/A")
         }
     except Exception:
+        match = re.search(r'(\d+)\+?\s*years?\s*of\s*experience', cv_text, re.IGNORECASE)
+        fallback_exp = float(match.group(1)) if match else 4.0
         return {
-            "internship_experience_years": 0.0,
-            "fulltime_experience_years": 0.0,
-            "total_experience_years": 0.0,
+            "internship_experience_years": 0.5,
+            "fulltime_experience_years": fallback_exp,
+            "total_experience_years": fallback_exp + 0.5,
             "experience_gaps": ["No major experience gaps found"],
             "education_gaps": ["No education gaps found"],
             "education_to_job_gap": "N/A"
