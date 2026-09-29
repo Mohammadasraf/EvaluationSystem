@@ -25,7 +25,7 @@ STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDS = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.6-Groq-SDK-Fix"
+LOGIC_VERSION = "v10.7-Robust-JSON-Fix"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
 os.makedirs(STORAGE_JDS, exist_ok=True)
@@ -103,7 +103,7 @@ def save_archived_file(uploaded_file, folder: str, prefix: str) -> str:
     return file_path
 
 # ------------------------------------------------------------------------------
-# LLM-POWERED COMPREHENSIVE EXTRACTION ENGINE (USING GROQ SDK)
+# LLM-POWERED COMPREHENSIVE EXTRACTION ENGINE (WITH ROBUST JSON PARSING)
 # ------------------------------------------------------------------------------
 def extract_comprehensive_profile_details(cv_text: str, groq_api_key: str) -> dict:
     current_date_str = datetime.datetime.now().strftime("%B %Y")
@@ -118,7 +118,7 @@ Calculate the following metrics precisely:
 5. "education_gaps": A list of any unexplained gaps or delays in education timelines. If none, return ["No education gaps found"].
 6. "education_to_job_gap": The exact time gap between completing education and starting the first job.
 
-CRITICAL: Return ONLY valid JSON format with NO markdown wrapping (like ```json), matching this exact structure:
+CRITICAL: Return ONLY valid JSON format matching this exact structure, with no extra conversational text:
 {{
   "internship_experience_years": 0.0,
   "fulltime_experience_years": 0.0,
@@ -141,15 +141,27 @@ CRITICAL: Return ONLY valid JSON format with NO markdown wrapping (like ```json)
             max_tokens=600
         )
         content = completion.choices[0].message.content
-        content = content.replace("```json", "").replace("```", "").strip()
+        
+        # --- Robust JSON Cleanup ---
+        content = content.strip()
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+            
+        start_idx = content.find('{')
+        end_idx = content.rfind('}')
+        if start_idx != -1 and end_idx != -1:
+            content = content[start_idx:end_idx+1]
+            
         return json.loads(content)
     except Exception as e:
         return {
             "internship_experience_years": 0.0,
             "fulltime_experience_years": 0.0,
             "total_experience_years": 0.0,
-            "experience_gaps": [f"Exception: {str(e)}"],
-            "education_gaps": [f"Exception: {str(e)}"],
+            "experience_gaps": [f"JSON Parse Exception: {str(e)}"],
+            "education_gaps": [],
             "education_to_job_gap": "Unable to calculate"
         }
 
@@ -321,7 +333,7 @@ st.session_state.custom_rules = rules_to_keep
 st.markdown("---")
 
 # ------------------------------------------------------------------------------
-# BATCHED EVALUATION ENGINE WITH GROQ SDK
+# BATCHED EVALUATION ENGINE WITH ROBUST JSON PARSING
 # ------------------------------------------------------------------------------
 def evaluate_batch_chunk(cv_text, jd_text, rule_chunk, groq_api_key):
     prompt = f"""
@@ -336,7 +348,7 @@ You are a universal enterprise HR AI evaluator. Evaluate the candidate against t
 --- RESUME ---
 {cv_text}
 
-CRITICAL: Return ONLY valid JSON format with NO markdown wrappers (like ```json), containing the evaluations for these specific rules:
+CRITICAL: Return ONLY valid JSON format matching this exact structure, with no markdown wrappers or conversational text:
 {{
   "Rule Evaluations": {{
     "Rule Name": {{"result": "Pass/Fail", "confidence": "90%", "reasoning": "Short objective explanation under 15 words."}}
@@ -353,10 +365,22 @@ CRITICAL: Return ONLY valid JSON format with NO markdown wrappers (like ```json)
             max_tokens=700
         )
         content = completion.choices[0].message.content
-        content = content.replace("```json", "").replace("```", "").strip()
+        
+        # --- Robust JSON Cleanup ---
+        content = content.strip()
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+            
+        start_idx = content.find('{')
+        end_idx = content.rfind('}')
+        if start_idx != -1 and end_idx != -1:
+            content = content[start_idx:end_idx+1]
+            
         return json.loads(content)
     except Exception as e:
-        return {"Error": str(e)}
+        return {"Error": f"JSON Parse Exception: {str(e)}"}
 
 def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
     profile_details = extract_comprehensive_profile_details(cv_text, groq_api_key)
