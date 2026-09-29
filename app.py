@@ -26,7 +26,7 @@ STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDS = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.8-JSON-Repair-Production"
+LOGIC_VERSION = "v10.9-JSON-Repair-Production-Fix"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
 os.makedirs(STORAGE_JDS, exist_ok=True)
@@ -104,7 +104,7 @@ def save_archived_file(uploaded_file, folder: str, prefix: str) -> str:
     return file_path
 
 # ------------------------------------------------------------------------------
-# LLM EXTRACTION WITH BULLETPROOF REPAIR ENGINE
+# LLM EXTRACTION WITH BULLETPROOF REPAIR ENGINE & EMPTY CHECK
 # ------------------------------------------------------------------------------
 def extract_comprehensive_profile_details(cv_text: str, groq_api_key: str) -> dict:
     current_date_str = datetime.datetime.now().strftime("%B %Y")
@@ -134,14 +134,20 @@ CRITICAL: Return ONLY valid JSON format matching this exact structure, with no m
 """
 
     try:
-        client = Groq(api_key=groq_api_key)
+        client = Groq(api_key=groq_api_key.strip())
         completion = client.chat.completions.create(
             model=MODEL_VERSION,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
             max_tokens=600
         )
+        
+        if not completion or not completion.choices:
+            raise ValueError("Empty completion object returned from Groq API")
+            
         content = completion.choices[0].message.content
+        if not content or not content.strip():
+            raise ValueError("Empty content string received from LLM")
         
         # Cleanup & Auto-Repair using json-repair
         content = content.strip()
@@ -151,13 +157,23 @@ CRITICAL: Return ONLY valid JSON format matching this exact structure, with no m
             content = content.split("```")[1].split("```")[0].strip()
             
         fixed_json_str = repair_json(content)
-        return json.loads(fixed_json_str)
+        parsed = json.loads(fixed_json_str)
+        
+        return {
+            "internship_experience_years": float(parsed.get("internship_experience_years", 0.0) or 0.0),
+            "fulltime_experience_years": float(parsed.get("fulltime_experience_years", 0.0) or 0.0),
+            "total_experience_years": float(parsed.get("total_experience_years", 0.0) or 0.0),
+            "experience_gaps": parsed.get("experience_gaps", ["No major experience gaps found"]),
+            "education_gaps": parsed.get("education_gaps", ["No education gaps found"]),
+            "education_to_job_gap": parsed.get("education_to_job_gap", "N/A")
+        }
     except Exception as e:
+        err_str = str(e)
         return {
             "internship_experience_years": 0.0,
             "fulltime_experience_years": 0.0,
             "total_experience_years": 0.0,
-            "experience_gaps": [f"Fallback recovery active due to parse exception: {str(e)}"],
+            "experience_gaps": [f"Fallback recovery active due to parse exception: {err_str}"],
             "education_gaps": [],
             "education_to_job_gap": "N/A"
         }
@@ -354,14 +370,19 @@ CRITICAL: Return ONLY valid JSON format matching this exact structure, with no m
 """
 
     try:
-        client = Groq(api_key=groq_api_key)
+        client = Groq(api_key=groq_api_key.strip())
         completion = client.chat.completions.create(
             model=MODEL_VERSION,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
             max_tokens=700
         )
+        if not completion or not completion.choices:
+            raise ValueError("Empty completion chunk")
+            
         content = completion.choices[0].message.content
+        if not content or not content.strip():
+            raise ValueError("Empty response text")
         
         # Cleanup & Auto-Repair using json-repair
         content = content.strip()
