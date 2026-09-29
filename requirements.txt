@@ -1,7 +1,8 @@
 streamlit
-PyMuPDF
+groq
+pymupdf
 python-docx
 pandas
-Pillow
-requests
+pillow
 pytesseract
+requests
