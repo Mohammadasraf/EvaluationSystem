@@ -24,8 +24,8 @@ except ImportError:
 STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDS = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
-MODEL_VERSION = "openai/gpt-oss-20b"  # Updated to currently active Groq standard model ID
-LOGIC_VERSION = "v10.4-Precision-Experience-UI"
+MODEL_VERSION = "openai/gpt-oss-20b"
+LOGIC_VERSION = "v10.5-Precision-JSON-Fix"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
 os.makedirs(STORAGE_JDS, exist_ok=True)
@@ -118,7 +118,7 @@ Calculate the following metrics precisely:
 5. "education_gaps": A list of any unexplained gaps or delays in education timelines. If none, return ["No education gaps found"].
 6. "education_to_job_gap": The exact time gap between completing education and starting the first job.
 
-Return ONLY valid JSON format matching this exact structure:
+CRITICAL: Return ONLY valid JSON format with NO markdown wrapping (like ```json), matching this exact structure:
 {{
   "internship_experience_years": 0.0,
   "fulltime_experience_years": 0.0,
@@ -141,13 +141,12 @@ Return ONLY valid JSON format matching this exact structure:
         "model": MODEL_VERSION,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.0,
-        "max_tokens": 600,
-        "response_format": {"type": "json_object"}
+        "max_tokens": 600
     }
 
     try:
         response = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
+            "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)",
             headers=headers,
             json=payload,
             timeout=30,
@@ -156,6 +155,8 @@ Return ONLY valid JSON format matching this exact structure:
         
         if response.status_code == 200:
             content = response.json()["choices"][0]["message"]["content"]
+            # Clean potential markdown wrappers
+            content = content.replace("```json", "").replace("```", "").strip()
             return json.loads(content)
         else:
             return {
@@ -359,7 +360,7 @@ You are a universal enterprise HR AI evaluator. Evaluate the candidate against t
 --- RESUME ---
 {cv_text}
 
-Return ONLY valid JSON format containing the evaluations for these specific rules:
+CRITICAL: Return ONLY valid JSON format with NO markdown wrappers (like ```json), containing the evaluations for these specific rules:
 {{
   "Rule Evaluations": {{
     "Rule Name": {{"result": "Pass/Fail", "confidence": "90%", "reasoning": "Short objective explanation under 15 words."}}
@@ -376,8 +377,7 @@ Return ONLY valid JSON format containing the evaluations for these specific rule
         "model": MODEL_VERSION,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.1,
-        "max_tokens": 700,
-        "response_format": {"type": "json_object"}
+        "max_tokens": 700
     }
 
     try:
@@ -394,6 +394,7 @@ Return ONLY valid JSON format containing the evaluations for these specific rule
             
         res_json = response.json()
         content = res_json["choices"][0]["message"]["content"]
+        content = content.replace("```json", "").replace("```", "").strip()
         return json.loads(content)
     except Exception as e:
         return {"Error": str(e)}
