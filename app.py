@@ -24,8 +24,8 @@ except ImportError:
 STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDS = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
-MODEL_VERSION = "qwen/qwen3.8-27b"  # Verified available model ID
-LOGIC_VERSION = "v9.0-LLM-Precision-Gaps"
+MODEL_VERSION = "llama-3.3-70b-versatile"  # Updated high-performance model ID
+LOGIC_VERSION = "v10.0-Precision-Experience-UI"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
 os.makedirs(STORAGE_JDS, exist_ok=True)
@@ -103,19 +103,25 @@ def save_archived_file(uploaded_file, folder: str, prefix: str) -> str:
     return file_path
 
 # ------------------------------------------------------------------------------
-# LLM-POWERED COMPREHENSIVE EXTRACTION ENGINE (100% ACCURACY)
+# LLM-POWERED COMPREHENSIVE EXTRACTION ENGINE (WITH SEPARATED EXPERIENCE)
 # ------------------------------------------------------------------------------
 def extract_comprehensive_profile_details(cv_text: str, groq_api_key: str) -> dict:
+    current_date_str = datetime.datetime.now().strftime("%B %Y")
     prompt = f"""
-You are an expert HR data extraction AI. Analyze the following candidate resume text meticulously.
-Extract the following 4 metrics with 100% precision:
-1. "total_experience_years": Total professional working experience in years as a float (e.g., 5.5). Calculate it precisely from the work history timeline. Do not hardcode or default; compute it directly from the resume dates.
-2. "experience_gaps": A list of any significant employment gaps found between professional jobs (e.g., ["Gap from Jan 2022 to Nov 2022: 10 months"]). If none, return ["No major experience gaps found"].
-3. "education_gaps": A list of any unexplained gaps or delays in education timelines (e.g., ["Gap of 1 year between graduation and post-graduation"]). If none, return ["No education gaps found"].
-4. "education_to_job_gap": The exact time gap between completing education (graduation) and starting the first professional job, explicitly stated in years and months (e.g., "3 months", "1 year 2 months", or "Started immediately / No gap").
+You are an expert HR data extraction AI and meticulous time-calculator. Today's current date is {current_date_str}. Analyze the candidate resume text meticulously to separate and calculate experience accurately.
+
+Calculate the following metrics precisely:
+1. "internship_experience_years": Total internship experience in years as a float (e.g., 0.5 for 6 months). If none, 0.0.
+2. "fulltime_experience_years": Total full-time professional working experience in years as a float (calculated from start dates to Present: {current_date_str}). Do not include internships here.
+3. "total_experience_years": The exact sum of internship experience and full-time experience as a float (e.g., 5.1).
+4. "experience_gaps": A list of any significant employment gaps found between professional jobs. If none, return ["No major experience gaps found"].
+5. "education_gaps": A list of any unexplained gaps or delays in education timelines. If none, return ["No education gaps found"].
+6. "education_to_job_gap": The exact time gap between completing education and starting the first job.
 
 Return ONLY valid JSON format matching this exact structure:
 {{
+  "internship_experience_years": 0.0,
+  "fulltime_experience_years": 0.0,
   "total_experience_years": 0.0,
   "experience_gaps": [],
   "education_gaps": [],
@@ -153,13 +159,17 @@ Return ONLY valid JSON format matching this exact structure:
             return json.loads(content)
         else:
             return {
+                "internship_experience_years": 0.0,
+                "fulltime_experience_years": 0.0,
                 "total_experience_years": 0.0,
                 "experience_gaps": [f"API Error ({response.status_code})"],
                 "education_gaps": ["API Error"],
-                "education_to_job_gap": "Unable to calculate due to API error"
+                "education_to_job_gap": "Unable to calculate"
             }
     except Exception as e:
         return {
+            "internship_experience_years": 0.0,
+            "fulltime_experience_years": 0.0,
             "total_experience_years": 0.0,
             "experience_gaps": [f"Exception: {str(e)}"],
             "education_gaps": [f"Exception: {str(e)}"],
@@ -185,6 +195,8 @@ def generate_word_report(candidate_name, recruiter_id, overall_score, recommenda
     doc.add_paragraph(f"Final Recommendation: {recommendation}")
     
     doc.add_heading("2. Universal Timeline & Detailed Metrics", level=1)
+    doc.add_paragraph(f"Full-Time Experience: {det_analysis.get('fulltime_experience_years', 0.0)} Years")
+    doc.add_paragraph(f"Internship Experience: {det_analysis.get('internship_experience_years', 0.0)} Years")
     doc.add_paragraph(f"Calculated Total Experience: {det_analysis.get('total_experience_years', 0.0)} Years")
     doc.add_paragraph(f"Education-to-Job Gap: {det_analysis.get('education_to_job_gap', 'N/A')}")
     
@@ -239,6 +251,9 @@ if "custom_rules" not in st.session_state:
         {"id": 5, "name": "Overall Profile Fit", "type": "AI Evaluation", "criteria": "Strong overall suitability for the role."}
     ]
 
+if "evaluation_results" not in st.session_state:
+    st.session_state.evaluation_results = None
+
 with st.sidebar:
     st.header("🔐 Security & Credentials")
     evaluator_id = st.text_input("Evaluator / User ID", value="alatifbhai@apexsystems")
@@ -283,7 +298,7 @@ with col_jd:
 
 with col_cv:
     st.subheader("👤 Candidate Resume (CV)")
-    candidate_name = st.text_input("Candidate Full Name", value="Candidate Name")
+    candidate_name = st.text_input("Candidate Full Name", value="Mohammadasraf Shaikh")
     cv_input_type = st.radio("CV Input Method", ["File Upload", "Paste Text"], key="cv_type")
     cv_text = ""
     cv_file = None
@@ -475,73 +490,96 @@ if st.button("🚀 Run Precision Evaluation", type="primary", use_container_widt
                 conn.commit()
                 conn.close()
 
+                # Store into Session State to avoid UI hiding on re-run / download
+                st.session_state.evaluation_results = {
+                    "candidate_name": candidate_name,
+                    "overall_score": overall_score,
+                    "recommendation": rec,
+                    "det_analysis": det_analysis,
+                    "rule_evals": rule_evals,
+                    "evidence_map": evidence_map
+                }
                 st.success("Evaluation completed successfully with precision extraction!")
 
-                word_file_io = generate_word_report(candidate_name, evaluator_id, overall_score, rec, det_analysis, rule_evals, evidence_map)
+# ------------------------------------------------------------------------------
+# RENDER UI RESULTS FROM SESSION STATE
+# ------------------------------------------------------------------------------
+if st.session_state.evaluation_results is not None:
+    res = st.session_state.evaluation_results
+    candidate_name = res["candidate_name"]
+    overall_score = res["overall_score"]
+    rec = res["recommendation"]
+    det_analysis = res["det_analysis"]
+    rule_evals = res["rule_evals"]
+    evidence_map = res["evidence_map"]
 
-                st.download_button(
-                    label="📥 Download Evaluation Report (.docx)",
-                    data=word_file_io,
-                    file_name=f"Candidate_Report_{candidate_name.replace(' ', '_')}.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    type="primary"
-                )
+    st.markdown("---")
+    word_file_io = generate_word_report(candidate_name, evaluator_id, overall_score, rec, det_analysis, rule_evals, evidence_map)
 
-                # Metrics Display
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Overall Match Score", f"{overall_score} / 100")
-                m2.metric("AI Recommendation", rec)
-                m3.metric("Total Experience", f"{det_analysis.get('total_experience_years', 0.0)} Yrs")
-                m4.metric("Education-to-Job Gap", det_analysis.get('education_to_job_gap', 'N/A'))
+    st.download_button(
+        label="📥 Download Evaluation Report (.docx)",
+        data=word_file_io,
+        file_name=f"Candidate_Report_{candidate_name.replace(' ', '_')}.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        type="primary"
+    )
 
-                # Detailed Gaps View
-                st.markdown("### 🔍 Career & Education Gaps Breakdown")
-                g1, g2 = st.columns(2)
-                with g1:
-                    st.markdown("**Experience Gaps:**")
-                    for eg in det_analysis.get('experience_gaps', ['None']):
-                        st.write(f"- {eg}")
-                with g2:
-                    st.markdown("**Education Gaps:**")
-                    for edg in det_analysis.get('education_gaps', ['None']):
-                        st.write(f"- {edg}")
+    # Metrics Display with Separated Experience
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Overall Match Score", f"{overall_score} / 100")
+    m2.metric("AI Recommendation", rec)
+    m3.metric("Full-Time Exp", f"{det_analysis.get('fulltime_experience_years', 0.0)} Yrs")
+    m4.metric("Intern Exp", f"{det_analysis.get('internship_experience_years', 0.0)} Yrs")
+    m5.metric("Total Experience", f"{det_analysis.get('total_experience_years', 0.0)} Yrs")
 
-                st.markdown("### 📊 Universal Evaluation Matrix & Confidence")
-                grid = []
-                for r_name, r_data in rule_evals.items():
-                    grid.append({
-                        "Rule": r_name,
-                        "Result": r_data.get("result"),
-                        "Confidence": r_data.get("confidence"),
-                        "Reasoning": r_data.get("reasoning")
-                    })
-                st.table(pd.DataFrame(grid))
+    # Detailed Gaps View
+    st.markdown("### 🔍 Career & Education Gaps Breakdown")
+    g1, g2 = st.columns(2)
+    with g1:
+        st.markdown("**Experience Gaps:**")
+        for eg in det_analysis.get('experience_gaps', ['None']):
+            st.write(f"- {eg}")
+    with g2:
+        st.markdown("**Education Gaps:**")
+        for edg in det_analysis.get('education_gaps', ['None']):
+            st.write(f"- {edg}")
 
-                st.markdown("---")
-                st.header("📝 Evaluation Summary Note, Conclusion & Recruiter Suggestions")
-                
-                failed_rules = [r_name for r_name, r_data in rule_evals.items() if "fail" in str(r_data.get("result", "")).lower()]
-                
-                if overall_score >= 80:
-                    conclusion_status = "✅ High Potential / Ready for Interview"
-                    action_suggestion = "Proceed directly to technical or HR interview rounds. Candidate demonstrates strong alignment with job requirements."
-                elif overall_score >= 50:
-                    conclusion_status = "⚠️ Moderate Match / Needs Clarification"
-                    if failed_rules:
-                        action_suggestion = f"Candidate shows promise in overall background, but specific required areas (e.g., {', '.join(failed_rules)}) are missing or unclear in the CV."
-                    else:
-                        action_suggestion = "Candidate meets basic criteria but requires a quick screening call to verify depth of experience."
-                else:
-                    conclusion_status = "❌ Low Alignment / Not Recommended"
-                    action_suggestion = "Significant gaps found against core JD requirements. Recommend sending a polite rejection notice."
+    st.markdown("### 📊 Universal Evaluation Matrix & Confidence")
+    grid = []
+    for r_name, r_data in rule_evals.items():
+        grid.append({
+            "Rule": r_name,
+            "Result": r_data.get("result"),
+            "Confidence": r_data.get("confidence"),
+            "Reasoning": r_data.get("reasoning")
+        })
+    st.table(pd.DataFrame(grid))
 
-                st.info(f"**Conclusion Status:** {conclusion_status}\n\n**Overall Score:** {overall_score}/100 | **Total Experience:** {det_analysis.get('total_experience_years', 0.0)} Years | **Education-to-Job Gap:** {det_analysis.get('education_to_job_gap', 'N/A')}")
-                
-                st.markdown("#### 💡 Actionable Suggestions for Recruiter")
-                st.markdown(f"""
-                1. **Next Step:** {action_suggestion}
-                2. **Missing/Weak Areas to Probe:** {', '.join(failed_rules) if failed_rules else 'None identified. All evaluated criteria passed successfully.'}
-                """)
+    st.markdown("---")
+    st.header("📝 Evaluation Summary Note, Conclusion & Recruiter Suggestions")
+    
+    failed_rules = [r_name for r_name, r_data in rule_evals.items() if "fail" in str(r_data.get("result", "")).lower()]
+    
+    if overall_score >= 80:
+        conclusion_status = "✅ High Potential / Ready for Interview"
+        action_suggestion = "Proceed directly to technical or HR interview rounds. Candidate demonstrates strong alignment with job requirements."
+    elif overall_score >= 50:
+        conclusion_status = "⚠️ Moderate Match / Needs Clarification"
+        if failed_rules:
+            action_suggestion = f"Candidate shows promise in overall background, but specific required areas (e.g., {', '.join(failed_rules)}) are missing or unclear in the CV."
+        else:
+            action_suggestion = "Candidate meets basic criteria but requires a quick screening call to verify depth of experience."
+    else:
+        conclusion_status = "❌ Low Alignment / Not Recommended"
+        action_suggestion = "Significant gaps found against core JD requirements. Recommend sending a polite rejection notice."
+
+    st.info(f"**Conclusion Status:** {conclusion_status}\n\n**Overall Score:** {overall_score}/100 | **Total Experience:** {det_analysis.get('total_experience_years', 0.0)} Years | **Education-to-Job Gap:** {det_analysis.get('education_to_job_gap', 'N/A')}")
+    
+    st.markdown("#### 💡 Actionable Suggestions for Recruiter")
+    st.markdown(f"""
+    1. **Next Step:** {action_suggestion}
+    2. **Missing/Weak Areas to Probe:** {', '.join(failed_rules) if failed_rules else 'None identified. All evaluated criteria passed successfully.'}
+    """)
 
 # ------------------------------------------------------------------------------
 # AUDIT TRAIL LOGS
