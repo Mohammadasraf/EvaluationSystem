@@ -67,6 +67,23 @@ def init_db():
 init_db()
 
 # ------------------------------------------------------------------------------
+# HELPER: FORMAT TIME GAPS (Years / Months)
+# ------------------------------------------------------------------------------
+def format_time_gap(value):
+    try:
+        val = float(value)
+        if val >= 1.0:
+            return f"{val:.1f} Yrs"
+        else:
+            months = round(val * 12)
+            if months <= 1:
+                return f"{months} Month"
+            else:
+                return f"{months} Months"
+    except (ValueError, TypeError):
+        return str(value)
+
+# ------------------------------------------------------------------------------
 # PARSER LAYER (In-Memory Processing)
 # ------------------------------------------------------------------------------
 def extract_text_with_ocr(uploaded_file) -> str:
@@ -214,10 +231,10 @@ def generate_in_memory_word_report(candidate_name, recruiter_id, overall_score, 
     doc.add_paragraph(f"Final Recommendation: {recommendation}")
     
     doc.add_heading("2. Universal Timeline & Detailed Metrics", level=1)
-    doc.add_paragraph(f"Full-Time Experience: {det_analysis.get('fulltime_experience_years', 0.0)} Years")
-    doc.add_paragraph(f"Internship Experience: {det_analysis.get('internship_experience_years', 0.0)} Years")
-    doc.add_paragraph(f"Calculated Total Experience: {det_analysis.get('total_experience_years', 0.0)} Years")
-    doc.add_paragraph(f"Education-to-Job Gap: {det_analysis.get('education_to_job_gap', 'N/A')}")
+    doc.add_paragraph(f"Full-Time Experience: {format_time_gap(det_analysis.get('fulltime_experience_years', 0.0))}")
+    doc.add_paragraph(f"Internship Experience: {format_time_gap(det_analysis.get('internship_experience_years', 0.0))}")
+    doc.add_paragraph(f"Calculated Total Experience: {format_time_gap(det_analysis.get('total_experience_years', 0.0))}")
+    doc.add_paragraph(f"Education-to-Job Gap: {format_time_gap(det_analysis.get('education_to_job_gap', 'N/A'))}")
     
     doc.add_heading("3. Evaluation Rules Matrix", level=1)
     table = doc.add_table(rows=1, cols=4)
@@ -582,12 +599,12 @@ if st.session_state.evaluation_results is not None:
         conclusion_html = "❌ Low Alignment / Not Recommended"
         next_step_msg = "Significant gaps found against core JD requirements. Recommend sending a polite rejection notice."
 
-    tot_exp_val = round(float(det_analysis.get('total_experience_years', 0.0)), 2)
-    edu_gap_val = det_analysis.get('education_to_job_gap', 'N/A')
+    tot_exp_formatted = format_time_gap(det_analysis.get('total_experience_years', 0.0))
+    edu_gap_formatted = format_time_gap(det_analysis.get('education_to_job_gap', 'N/A'))
 
     st.info(
         f"**Conclusion Status:** {conclusion_html}\n\n"
-        f"**Overall Score:** {overall_score}/100 | **Total Experience:** {tot_exp_val} Years | **Education-to-Job Gap:** {edu_gap_val}"
+        f"**Overall Score:** {overall_score}/100 | **Total Experience:** {tot_exp_formatted} | **Education-to-Job Gap:** {edu_gap_formatted}"
     )
 
     st.markdown("#### 💡 Actionable Suggestions for Recruiter")
@@ -597,16 +614,16 @@ if st.session_state.evaluation_results is not None:
     weak_areas = ", ".join(failed_rules) if failed_rules else "Technical & Domain Competency, Overall Profile Fit"
     st.markdown(f"2. **Missing/Weak Areas to Probe:** {weak_areas}")
 
-    ft_exp = round(float(det_analysis.get('fulltime_experience_years', 0.0)), 1)
-    in_exp = round(float(det_analysis.get('internship_experience_years', 0.0)), 1)
-    tot_exp = round(float(det_analysis.get('total_experience_years', 0.0)), 1)
+    ft_exp = format_time_gap(det_analysis.get('fulltime_experience_years', 0.0))
+    in_exp = format_time_gap(det_analysis.get('internship_experience_years', 0.0))
+    tot_exp = format_time_gap(det_analysis.get('total_experience_years', 0.0))
 
     st.markdown("---")
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Overall Match Score", f"{overall_score} / 100")
-    m2.metric("Full-Time Exp", f"{ft_exp} Yrs")
-    m3.metric("Intern Exp", f"{in_exp} Yrs")
-    m4.metric("Total Experience", f"{tot_exp} Yrs")
+    m2.metric("Full-Time Exp", ft_exp)
+    m3.metric("Intern Exp", in_exp)
+    m4.metric("Total Experience", tot_exp)
 
     # --- Career & Education Gap Breakdown Section ---
     st.markdown("### 🔍 Career & Education Gap Breakdown")
@@ -624,14 +641,15 @@ if st.session_state.evaluation_results is not None:
     with col_g2:
         st.markdown("#### 🎓 Education & Transition Gaps")
         edu_gaps_list = det_analysis.get("education_gaps", ["No education gaps found"])
-        edu_to_job = det_analysis.get("education_to_job_gap", "N/A")
+        edu_to_job_raw = det_analysis.get("education_to_job_gap", "N/A")
+        edu_to_job_formatted = format_time_gap(edu_to_job_raw)
         
         if isinstance(edu_gaps_list, list) and len(edu_gaps_list) > 0:
             for gap in edu_gaps_list:
-                if str(gap).strip().lower() != str(edu_to_job).strip().lower():
+                if str(gap).strip().lower() != str(edu_to_job_raw).strip().lower():
                     st.markdown(f"- {gap}")
         
-        st.metric(label="Education-to-Job Transition Gap", value=str(edu_to_job))
+        st.metric(label="Education-to-Job Transition Gap", value=edu_to_job_formatted)
 
     st.markdown("### 📊 Universal Evaluation Matrix & Confidence")
     grid = []
