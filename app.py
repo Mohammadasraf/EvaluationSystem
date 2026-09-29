@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.45-Universal-MultiFormat-Gap-Fix"
+LOGIC_VERSION = "v10.46-Universal-MultiFormat-Gap-Fix"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
@@ -154,7 +154,6 @@ def extract_experience_via_regex(text: str) -> float:
 def calculate_deterministic_timeline(cv_text: str) -> dict:
     cleaned_cv = cv_text.replace("'", "").replace("'", "")
     
-    # Universal pattern to catch multiple date range formats across any CV template
     date_range_pattern = r'([A-Za-z0-9\/\-\.\s]{3,12})\s*[\–\-\to]+\s*([A-Za-z0-9\/\-\.\s]{3,12}|Present|Current|Till Date|Now)'
     matches = re.findall(date_range_pattern, cleaned_cv, re.IGNORECASE)
     
@@ -185,10 +184,8 @@ def calculate_deterministic_timeline(cv_text: str) -> dict:
                 fulltime_months += months
                 work_periods.append((start_dt, end_dt, "fulltime"))
 
-    # Sort work periods chronologically
     work_periods = sorted(work_periods, key=lambda x: x[0])
 
-    # Remove overlapping or duplicate intervals to prevent double counting
     merged_work_periods = []
     for period in work_periods:
         if not merged_work_periods:
@@ -219,7 +216,6 @@ def calculate_deterministic_timeline(cv_text: str) -> dict:
         calculated_total_years = extract_experience_via_regex(cv_text)
         fulltime_months = int(calculated_total_years * 12)
 
-    # --- UNIVERSAL EDUCATION END DATE PARSING ---
     edu_end_date = None
     edu_pos = cleaned_cv.lower().find('education')
     if edu_pos != -1:
@@ -637,6 +633,7 @@ if st.button("🚀 Run Deterministic Precision Evaluation", type="primary", use_
                 overall_score,
                 rec,
                 "Deterministic Math Guardrail Evaluation",
+                "",
                 cv_name,
                 jd_name,
                 json.dumps(st.session_state.custom_rules),
