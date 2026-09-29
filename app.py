@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.40-Fixed-Education-Experience-Bug"
+LOGIC_VERSION = "v10.42-Accurate-Education-Gap-Fix"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
@@ -142,10 +142,8 @@ def calculate_deterministic_timeline(cv_text: str) -> dict:
     work_periods = []
     for start_str, end_str in matches:
         pos = cleaned_cv.find(start_str)
-        # Check surrounding text context to filter out Education dates
         snippet_context = cleaned_cv[max(0, pos - 120): pos + 50].lower() if pos != -1 else ""
         
-        # Skip if it belongs to Education section
         edu_keywords = ['b.tech', 'b.e', 'm.tech', 'b.sc', 'm.sc', 'graduation', 'degree', 'cgpa', 'college', 'university', 'school', 'education']
         if any(kw in snippet_context for kw in edu_keywords):
             continue
@@ -181,15 +179,20 @@ def calculate_deterministic_timeline(cv_text: str) -> dict:
         calculated_total_years = extract_experience_via_regex(cv_text)
         fulltime_months = int(calculated_total_years * 12)
 
-    edu_pattern = r'(B\.?Tech|B\.?E\.?|M\.?Tech|B\.?Sc|M\.?Sc|Graduation|Degree).*?([A-Za-z]+\s*\d{2,4})'
-    edu_matches = re.findall(edu_pattern, cleaned_cv, re.IGNORECASE)
-    
+    # --- ACCURATE EDUCATION END DATE PARSING ---
+    # Look specifically for education section range end date (e.g., Jun 2016 – Aug 2020 -> picks Aug 2020)
     edu_end_date = None
-    for edu_title, date_str in edu_matches:
-        dt = parse_date_str(date_str)
-        if dt:
-            edu_end_date = dt
-            break
+    edu_section_match = re.search(r'(education|b\.?tech|b\.?e\.?|graduation).*?(20\d{2})', cleaned_cv, re.IGNORECASE)
+    if edu_section_match:
+        # Search for all date ranges within 300 chars of education keyword
+        edu_pos = cleaned_cv.lower().find('education')
+        if edu_pos == -1:
+            edu_pos = 0
+        edu_subtext = cleaned_cv[edu_pos:edu_pos + 400]
+        sub_ranges = re.findall(r'([A-Za-z]+\s*\d{2,4})\s*[\–\-\to]\s*([A-Za-z]+\s*\d{2,4})', edu_subtext)
+        if sub_ranges:
+            # Take the end date of the last matched range in education section
+            edu_end_date = parse_date_str(sub_ranges[-1][1])
 
     education_to_job_gap_str = "Seamless Transition"
     if edu_end_date and work_periods:
@@ -476,265 +479,4 @@ Return ONLY valid JSON:
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
-            
-        parsed_data = json.loads(repair_json(content))
-        if "Rule Evaluations" not in parsed_data:
-            parsed_data = {"Rule Evaluations": parsed_data}
-        return parsed_data
-    except Exception:
-        fallback_evals = {rule['name']: {"result": "Pass", "confidence": "50%", "reasoning": "Fallback recovered."} for rule in rule_chunk}
-        return {"Rule Evaluations": fallback_evals}
-
-def apply_deterministic_guardrails(jd_analysis, det_analysis, combined_rule_evals, overall_score, recommendation):
-    min_req_exp = float(jd_analysis.get('minimum_experience_years', 0.0))
-    candidate_tot_exp = float(det_analysis.get('total_experience_years', 0.0))
-    
-    if min_req_exp > 0.0 and candidate_tot_exp < min_req_exp:
-        recommendation = "Reject"
-        overall_score = min(overall_score, 40.0)
-        
-        for r_name in combined_rule_evals:
-            if "experience" in r_name.lower() or "work" in r_name.lower():
-                combined_rule_evals[r_name] = {
-                    "result": "Fail",
-                    "confidence": "100%",
-                    "reasoning": f"Hard check: Candidate experience ({candidate_tot_exp}y) is less than JD requirement ({min_req_exp}y)."
-                }
-        summary = f"Candidate failed hard experience requirement (Required: {min_req_exp}y, Found: {candidate_tot_exp}y)."
-    else:
-        summary = "Candidate met required thresholds."
-        
-    return combined_rule_evals, overall_score, recommendation, summary
-
-def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
-    jd_analysis = extract_jd_requirements(jd_text, groq_api_key)
-    profile_details = calculate_deterministic_timeline(cv_text)
-    evidence_map = extract_universal_evidence(cv_text)
-
-    det_analysis = profile_details
-
-    chunk_size = 4
-    rule_chunks = [rules_list[i:i + chunk_size] for i in range(0, len(rules_list), chunk_size)]
-    
-    combined_rule_evals = {}
-    score_points = 0.0
-    total_rules = len(rules_list)
-
-    for chunk in rule_chunks:
-        res = evaluate_batch_chunk(cv_text, jd_text, chunk, groq_api_key)
-        evals = res.get("Rule Evaluations", {})
-        for r_name, r_data in evals.items():
-            combined_rule_evals[r_name] = r_data
-            res_str = str(r_data.get("result", "")).lower()
-            if "pass" in res_str and "partial" not in res_str:
-                score_points += 1.0
-            elif "partial" in res_str:
-                score_points += 0.7
-
-    overall_score = round((score_points / max(total_rules, 1)) * 100, 1)
-    if overall_score >= 80:
-        recommendation = "Strong Hire"
-    elif overall_score >= 40:
-        recommendation = "Consider / Request Updated CV"
-    else:
-        recommendation = "Reject"
-
-    combined_rule_evals, overall_score, recommendation, summary = apply_deterministic_guardrails(
-        jd_analysis, det_analysis, combined_rule_evals, overall_score, recommendation
-    )
-
-    final_output = {
-        "Rule Evaluations": combined_rule_evals,
-        "Overall Candidate Match Score": overall_score,
-        "Derived Recommendation": recommendation,
-        "AI Contextual Summary": summary
-    }
-
-    return det_analysis, evidence_map, final_output
-
-if st.button("🚀 Run Deterministic Precision Evaluation", type="primary", use_container_width=True):
-    if not groq_api_key:
-        st.error("Groq API Key is required.")
-    elif not cv_text or not jd_text:
-        st.warning("Please provide both JD and Candidate Resume.")
-    else:
-        with st.spinner("Processing deterministic timeline calculations and rule evaluation..."):
-            cv_name = cv_file.name if (cv_file and hasattr(cv_file, 'name')) else "Pasted CV Text"
-            jd_name = jd_file.name if (jd_file and hasattr(jd_file, 'name')) else "Pasted JD Text"
-
-            det_analysis, evidence_map, ai_results = evaluate_hybrid_system_batched(cv_text, jd_text, st.session_state.custom_rules, groq_api_key)
-
-            rule_evals = ai_results.get("Rule Evaluations", {})
-            overall_score = ai_results.get("Overall Candidate Match Score", 0.0)
-            rec = ai_results.get("Derived Recommendation", "Consider")
-            summary_text = ai_results.get("AI Contextual Summary", "")
-
-            word_file_io = generate_in_memory_word_report(
-                candidate_name, evaluator_id, overall_score, rec, det_analysis, rule_evals, evidence_map
-            )
-
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO evaluations (
-                    timestamp, recruiter_id, candidate_name, overall_score, recommendation, 
-                    human_override, override_notes, cv_source_name, jd_source_name, 
-                    dynamic_rule_config, deterministic_analysis, ai_evaluations, 
-                    evidence_snippets, model_version, logic_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                evaluator_id,
-                candidate_name,
-                overall_score,
-                rec,
-                rec,
-                "Deterministic Math Guardrail Evaluation",
-                cv_name,
-                jd_name,
-                json.dumps(st.session_state.custom_rules),
-                json.dumps(det_analysis),
-                json.dumps(ai_results),
-                json.dumps(evidence_map),
-                MODEL_VERSION,
-                LOGIC_VERSION
-            ))
-            conn.commit()
-            conn.close()
-
-            st.session_state.evaluation_results = {
-                "candidate_name": candidate_name,
-                "overall_score": overall_score,
-                "recommendation": rec,
-                "det_analysis": det_analysis,
-                "rule_evals": rule_evals,
-                "evidence_map": evidence_map,
-                "summary": summary_text,
-                "word_file_io": word_file_io
-            }
-            st.success("Evaluation completed successfully with deterministic math calculation!")
-
-# ------------------------------------------------------------------------------
-# RENDER UI RESULTS FROM SESSION STATE
-# ------------------------------------------------------------------------------
-if st.session_state.evaluation_results is not None:
-    res = st.session_state.evaluation_results
-    candidate_name = res["candidate_name"]
-    overall_score = res["overall_score"]
-    rec = res["recommendation"]
-    det_analysis = res["det_analysis"]
-    rule_evals = res["rule_evals"]
-    evidence_map = res["evidence_map"]
-    summary_text = res.get("summary", "")
-    word_file_io = res["word_file_io"]
-
-    st.markdown("---")
-    st.download_button(
-        label="📥 Download Evaluation Report (.docx)",
-        data=word_file_io,
-        file_name=f"Candidate_Report_{candidate_name.replace(' ', '_')}.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        type="primary"
-    )
-
-    # --- AI Recommendation & Status Badge Section ---
-    st.markdown("### 📌 AI Recommendation & Verdict")
-    if "Strong Hire" in rec:
-        st.success(f"**Recommended Status:** {rec}")
-    elif "Consider" in rec:
-        st.warning(f"**Recommended Status:** {rec}")
-    else:
-        st.error(f"**Recommended Status:** {rec}")
-
-    # --- Evaluation Summary Note & Recruiter Suggestions UI Section ---
-    st.markdown("### 📋 Evaluation Summary Note, Conclusion & Recruiter Suggestions")
-    
-    if overall_score >= 80:
-        conclusion_html = "✅ High Potential / Ready for Interview"
-        next_step_msg = "Strong alignment with core JD requirements. Recommend scheduling an initial technical interview."
-    elif overall_score >= 40:
-        conclusion_html = "⚠️ Moderate Match / Needs Clarification"
-        next_step_msg = "Candidate shows partial alignment. Probe into missing skills or request an updated resume."
-    else:
-        conclusion_html = "❌ Low Alignment / Not Recommended"
-        next_step_msg = "Significant gaps found against core JD requirements. Recommend sending a polite rejection notice."
-
-    tot_exp_formatted = format_time_gap(det_analysis.get('total_experience_years', 0.0))
-    edu_gap_formatted = format_time_gap(det_analysis.get('education_to_job_gap', 'Seamless Transition'))
-
-    st.info(
-        f"**Conclusion Status:** {conclusion_html}\n\n"
-        f"**Overall Score:** {overall_score}/100 | **Total Experience:** {tot_exp_formatted} | **Education-to-Job Gap:** {edu_gap_formatted}"
-    )
-
-    st.markdown("#### 💡 Actionable Suggestions for Recruiter")
-    st.markdown(f"1. **Next Step:** {next_step_msg}")
-    
-    failed_rules = [r_name for r_name, r_data in rule_evals.items() if str(r_data.get("result", "")).lower() == "fail"]
-    weak_areas = ", ".join(failed_rules) if failed_rules else "Technical & Domain Competency, Overall Profile Fit"
-    st.markdown(f"2. **Missing/Weak Areas to Probe:** {weak_areas}")
-
-    ft_exp = format_time_gap(det_analysis.get('fulltime_experience_years', 0.0))
-    in_exp = format_time_gap(det_analysis.get('internship_experience_years', 0.0))
-    tot_exp = format_time_gap(det_analysis.get('total_experience_years', 0.0))
-
-    st.markdown("---")
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Overall Match Score", f"{overall_score} / 100")
-    m2.metric("Full-Time Exp", ft_exp)
-    m3.metric("Intern Exp", in_exp)
-    m4.metric("Total Experience", tot_exp)
-
-    # --- Career & Education Gap Breakdown Section ---
-    st.markdown("### 🔍 Career & Education Gap Breakdown (Math Calculated)")
-    col_g1, col_g2 = st.columns(2)
-    
-    with col_g1:
-        st.markdown("#### 💼 Experience Gaps")
-        exp_gaps_list = det_analysis.get("experience_gaps", ["No major experience gaps found"])
-        if isinstance(exp_gaps_list, list) and len(exp_gaps_list) > 0:
-            for gap in exp_gaps_list:
-                st.markdown(f"- {gap}")
-        else:
-            st.markdown("- No major experience gaps found")
-            
-    with col_g2:
-        st.markdown("#### 🎓 Education & Transition Gaps")
-        edu_to_job_raw = det_analysis.get("education_to_job_gap", "Seamless Transition")
-        edu_to_job_formatted = format_time_gap(edu_to_job_raw)
-        st.metric(label="Education-to-Job Transition Gap", value=edu_to_job_formatted)
-
-    st.markdown("### 📊 Universal Evaluation Matrix & Confidence")
-    grid = []
-    for r_name, r_data in rule_evals.items():
-        grid.append({
-            "Rule": r_name,
-            "Result": r_data.get("result"),
-            "Confidence": r_data.get("confidence"),
-            "Reasoning": r_data.get("reasoning")
-        })
-    st.table(pd.DataFrame(grid))
-
-# ------------------------------------------------------------------------------
-# AUDIT TRAIL LOGS
-# ------------------------------------------------------------------------------
-st.markdown("---")
-st.header("📋 Complete Audit Trail & History")
-
-conn = sqlite3.connect(DB_PATH)
-cursor = conn.cursor()
-cursor.execute("SELECT id, timestamp, recruiter_id, candidate_name, overall_score, recommendation, cv_source_name, jd_source_name, model_version, logic_version FROM evaluations ORDER BY id DESC")
-rows = cursor.fetchall()
-conn.close()
-
-if rows:
-    for row in rows:
-        eval_id, timestamp, rec_id, cand_name, score, rec, cv_src, jd_src, model_v, logic_v = row
-        with st.expander(f"Record #{eval_id} | {cand_name} - Score: {score}/100 ({timestamp})"):
-            c1, c2, c3 = st.columns(3)
-            c1.write(f"**Recruiter:** {rec_id}")
-            c2.write(f"**Recommendation:** {rec}")
-            c3.write(f"**Model:** {model_v}")
-            st.text(f"CV Source: {cv_src}")
-            st.text(f"JD Source: {jd_src}")
+            content = content.split("
