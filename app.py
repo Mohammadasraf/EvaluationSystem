@@ -20,16 +20,11 @@ except ImportError:
     HAS_OCR = False
 
 # ------------------------------------------------------------------------------
-# CONFIGURATION & CONSTANTS
+# CONFIGURATION & CONSTANTS (In-Memory / No Server Disk Storage)
 # ------------------------------------------------------------------------------
-STORAGE_CVS = os.path.join("storage", "CVs")
-STORAGE_JDs = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.20-CleanGapBreakdown-UI"
-
-os.makedirs(STORAGE_CVS, exist_ok=True)
-os.makedirs(STORAGE_JDs, exist_ok=True)
+LOGIC_VERSION = "v10.22-InclusionMemory-BrowserDownload"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT
@@ -47,8 +42,8 @@ def init_db():
             recommendation TEXT,
             human_override TEXT,
             override_notes TEXT,
-            cv_file_path TEXT,
-            jd_file_path TEXT,
+            cv_source_name TEXT,
+            jd_source_name TEXT,
             dynamic_rule_config TEXT,
             deterministic_analysis TEXT,
             ai_evaluations TEXT,
@@ -63,7 +58,7 @@ def init_db():
 init_db()
 
 # ------------------------------------------------------------------------------
-# PARSER LAYER
+# PARSER LAYER (In-Memory Processing)
 # ------------------------------------------------------------------------------
 def extract_text_with_ocr(uploaded_file) -> str:
     if uploaded_file is None:
@@ -90,18 +85,6 @@ def extract_text_with_ocr(uploaded_file) -> str:
         img = Image.open(uploaded_file)
         return pytesseract.image_to_string(img)
     return text
-
-def save_archived_file(uploaded_file, folder: str, prefix: str) -> str:
-    if uploaded_file is None:
-        return ""
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{timestamp}_{prefix}_{uploaded_file.name}"
-    file_path = os.path.join(folder, filename)
-    uploaded_file.seek(0)
-    with open(file_path, "wb") as f:
-        f.write(uploaded_file.read())
-    uploaded_file.seek(0)
-    return file_path
 
 # ------------------------------------------------------------------------------
 # DETERMINISTIC JD & CV PARSING HELPERS
@@ -208,9 +191,9 @@ def extract_universal_evidence(cv_text: str) -> dict:
     return {"Key Experience Excerpts": lines[:5]}
 
 # ------------------------------------------------------------------------------
-# WORD REPORT GENERATOR
+# IN-MEMORY WORD REPORT GENERATOR
 # ------------------------------------------------------------------------------
-def generate_word_report(candidate_name, recruiter_id, overall_score, recommendation, det_analysis, rule_evals, evidence_map):
+def generate_in_memory_word_report(candidate_name, recruiter_id, overall_score, recommendation, det_analysis, rule_evals, evidence_map):
     doc = docx.Document()
     doc.add_heading("Universal Candidate Evaluation Report", level=0)
     
@@ -248,6 +231,7 @@ def generate_word_report(candidate_name, recruiter_id, overall_score, recommenda
         for snip in snippets:
             doc.add_paragraph(f'"{snip}"', style='Intense Quote')
             
+    # Return directly as BytesIO buffer for browser download
     bio = io.BytesIO()
     doc.save(bio)
     bio.seek(0)
@@ -258,8 +242,8 @@ def generate_word_report(candidate_name, recruiter_id, overall_score, recommenda
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="Universal Enterprise Candidate Evaluator", layout="wide")
 
-st.title("⚡ Universal Enterprise Candidate Evaluation System")
-st.caption("LLM Precision + Deterministic Guardrails + Word Export")
+st.title("⚡ Universal Enterprise Candidate Evaluation System (In-Memory)")
+st.caption("LLM Precision + Deterministic Guardrails + 100% Browser-Based Processing")
 
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = [
@@ -297,7 +281,7 @@ with st.sidebar:
     else:
         st.success("✅ Groq API Key loaded securely from Secrets")
         
-    st.info(f"Model: {MODEL_VERSION}\nLogic: {LOGIC_VERSION}")
+    st.info(f"Model: {MODEL_VERSION}\nLogic: {LOGIC_VERSION}\nStorage: In-Memory / Browser Only")
 
 # Section 1: Inputs
 st.markdown("### 1. Inputs (Job Description & Candidate Resume)")
@@ -483,15 +467,15 @@ def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
 
     return det_analysis, evidence_map, final_output
 
-if st.button("🚀 Run Precision Evaluation", type="primary", use_container_width=True):
+if st.button("🚀 Run In-Memory Precision Evaluation", type="primary", use_container_width=True):
     if not groq_api_key:
         st.error("Groq API Key is required.")
     elif not cv_text or not jd_text:
         st.warning("Please provide both JD and Candidate Resume.")
     else:
-        with st.spinner("Extracting profile timeline, running deterministic checks, and evaluating rules..."):
-            cv_path = save_archived_file(cv_file, STORAGE_CVS, "CV") if cv_file else "Pasted Text"
-            jd_path = save_archived_file(jd_file, STORAGE_JDs, "JD") if jd_file else "Pasted Text"
+        with st.spinner("Processing in-memory timeline extraction and rule evaluation..."):
+            cv_name = cv_file.name if cv_file else "Pasted Text"
+            jd_name = jd_file.name if jd_file else "Pasted Text"
 
             det_analysis, evidence_map, ai_results = evaluate_hybrid_system_batched(cv_text, jd_text, st.session_state.custom_rules, groq_api_key)
 
@@ -500,12 +484,18 @@ if st.button("🚀 Run Precision Evaluation", type="primary", use_container_widt
             rec = ai_results.get("Derived Recommendation", "Consider")
             summary_text = ai_results.get("AI Contextual Summary", "")
 
+            # Generate report buffer directly in memory
+            word_file_io = generate_in_memory_word_report(
+                candidate_name, evaluator_id, overall_score, rec, det_analysis, rule_evals, evidence_map
+            )
+
+            # Log record metadata without file paths
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO evaluations (
                     timestamp, recruiter_id, candidate_name, overall_score, recommendation, 
-                    human_override, override_notes, cv_file_path, jd_file_path, 
+                    human_override, override_notes, cv_source_name, jd_source_name, 
                     dynamic_rule_config, deterministic_analysis, ai_evaluations, 
                     evidence_snippets, model_version, logic_version
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -516,9 +506,9 @@ if st.button("🚀 Run Precision Evaluation", type="primary", use_container_widt
                 overall_score,
                 rec,
                 rec,
-                "Automated Guardrail Evaluation",
-                cv_path,
-                jd_path,
+                "In-Memory Guardrail Evaluation",
+                cv_name,
+                jd_name,
                 json.dumps(st.session_state.custom_rules),
                 json.dumps(det_analysis),
                 json.dumps(ai_results),
@@ -536,9 +526,10 @@ if st.button("🚀 Run Precision Evaluation", type="primary", use_container_widt
                 "det_analysis": det_analysis,
                 "rule_evals": rule_evals,
                 "evidence_map": evidence_map,
-                "summary": summary_text
+                "summary": summary_text,
+                "word_file_io": word_file_io
             }
-            st.success("Evaluation completed with deterministic guardrails applied!")
+            st.success("Evaluation completed successfully in-memory! You can download the report below.")
 
 # ------------------------------------------------------------------------------
 # RENDER UI RESULTS FROM SESSION STATE
@@ -552,10 +543,9 @@ if st.session_state.evaluation_results is not None:
     rule_evals = res["rule_evals"]
     evidence_map = res["evidence_map"]
     summary_text = res.get("summary", "")
+    word_file_io = res["word_file_io"]
 
     st.markdown("---")
-    word_file_io = generate_word_report(candidate_name, evaluator_id, overall_score, rec, det_analysis, rule_evals, evidence_map)
-
     st.download_button(
         label="📥 Download Evaluation Report (.docx)",
         data=word_file_io,
@@ -612,7 +602,7 @@ if st.session_state.evaluation_results is not None:
     m3.metric("Intern Exp", f"{in_exp} Yrs")
     m4.metric("Total Experience", f"{tot_exp} Yrs")
 
-    # --- Career & Education Gap Breakdown Section (Cleaned & Fixed) ---
+    # --- Career & Education Gap Breakdown Section ---
     st.markdown("### 🔍 Career & Education Gap Breakdown")
     col_g1, col_g2 = st.columns(2)
     
@@ -656,15 +646,17 @@ st.header("📋 Complete Audit Trail & History")
 
 conn = sqlite3.connect(DB_PATH)
 cursor = conn.cursor()
-cursor.execute("SELECT id, timestamp, recruiter_id, candidate_name, overall_score, recommendation, cv_file_path, jd_file_path, model_version, logic_version FROM evaluations ORDER BY id DESC")
+cursor.execute("SELECT id, timestamp, recruiter_id, candidate_name, overall_score, recommendation, cv_source_name, jd_source_name, model_version, logic_version FROM evaluations ORDER BY id DESC")
 rows = cursor.fetchall()
 conn.close()
 
 if rows:
     for row in rows:
-        eval_id, timestamp, rec_id, cand_name, score, rec, cv_path, jd_path, model_v, logic_v = row
+        eval_id, timestamp, rec_id, cand_name, score, rec, cv_src, jd_src, model_v, logic_v = row
         with st.expander(f"Record #{eval_id} | {cand_name} - Score: {score}/100 ({timestamp})"):
             c1, c2, c3 = st.columns(3)
             c1.write(f"**Recruiter:** {rec_id}")
             c2.write(f"**Recommendation:** {rec}")
             c3.write(f"**Model:** {model_v}")
+            st.text(f"CV Source: {cv_src}")
+            st.text(f"JD Source: {jd_src}")
