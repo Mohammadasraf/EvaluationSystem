@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.36-In-Memory-RegexFallback"
+LOGIC_VERSION = "v10.37-In-Memory-RegexFallback"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
@@ -177,6 +177,7 @@ def extract_comprehensive_profile_details(cv_text: str, groq_api_key: str) -> di
         "You are an expert global HR data extraction and timeline calculation engine. "
         "Analyze the provided resume text thoroughly. "
         "Calculate exact full-time professional experience, internships, experience gaps, education gaps, and the education-to-job transition gap based on actual dates found in the text. "
+        "If internships are mentioned, calculate their duration in years. If no education-to-job gap exists, state 'Seamless Transition' instead of 'N/A'. "
         "Always output strictly valid JSON without markdown wrappers."
     )
     
@@ -190,7 +191,7 @@ Return ONLY valid JSON matching this exact structure:
   "total_experience_years": 0.0,
   "experience_gaps": [],
   "education_gaps": [],
-  "education_to_job_gap": "N/A"
+  "education_to_job_gap": "Seamless Transition"
 }}
 
 --- RESUME TEXT ---
@@ -224,9 +225,13 @@ Return ONLY valid JSON matching this exact structure:
         if not edu_gaps:
             edu_gaps = ["No education gaps found"]
 
-        edu_to_job = parsed.get("education_to_job_gap", "N/A")
-        if not edu_to_job or str(edu_to_job).strip() in ["", "None"]:
-            edu_to_job = "N/A"
+        edu_to_job = parsed.get("education_to_job_gap", "Seamless Transition")
+        if not edu_to_job or str(edu_to_job).strip() in ["", "None", "N/A"]:
+            edu_to_job = "Seamless Transition"
+
+        # Heuristic Fallback for Internships if text mentions internship but value is 0.0
+        if internship == 0.0 and re.search(r'\b(intern|internship|trainee)\b', cv_text, re.IGNORECASE):
+            internship = 0.5  # Default estimated duration if exact months/years aren't parsed by LLM
 
         # Robust Fallback if total exp is zero
         if total == 0.0:
@@ -243,13 +248,14 @@ Return ONLY valid JSON matching this exact structure:
         }
     except Exception:
         fallback_total = extract_experience_via_regex(cv_text)
+        has_intern = 0.5 if re.search(r'\b(intern|internship|trainee)\b', cv_text, re.IGNORECASE) else 0.0
         return {
-            "internship_experience_years": 0.0,
-            "fulltime_experience_years": fallback_total,
+            "internship_experience_years": has_intern,
+            "fulltime_experience_years": max(0.0, fallback_total - has_intern),
             "total_experience_years": fallback_total,
             "experience_gaps": ["No major experience gaps found"],
             "education_gaps": ["No education gaps found"],
-            "education_to_job_gap": "N/A"
+            "education_to_job_gap": "Seamless Transition"
         }
 
 def extract_universal_evidence(cv_text: str) -> dict:
@@ -274,7 +280,7 @@ def generate_in_memory_word_report(candidate_name, recruiter_id, overall_score, 
     doc.add_paragraph(f"Full-Time Experience: {format_time_gap(det_analysis.get('fulltime_experience_years', 0.0))}")
     doc.add_paragraph(f"Internship Experience: {format_time_gap(det_analysis.get('internship_experience_years', 0.0))}")
     doc.add_paragraph(f"Calculated Total Experience: {format_time_gap(det_analysis.get('total_experience_years', 0.0))}")
-    doc.add_paragraph(f"Education-to-Job Gap: {format_time_gap(det_analysis.get('education_to_job_gap', 'N/A'))}")
+    doc.add_paragraph(f"Education-to-Job Gap: {format_time_gap(det_analysis.get('education_to_job_gap', 'Seamless Transition'))}")
     
     doc.add_heading("3. Evaluation Rules Matrix", level=1)
     table = doc.add_table(rows=1, cols=4)
@@ -640,7 +646,7 @@ if st.session_state.evaluation_results is not None:
         next_step_msg = "Significant gaps found against core JD requirements. Recommend sending a polite rejection notice."
 
     tot_exp_formatted = format_time_gap(det_analysis.get('total_experience_years', 0.0))
-    edu_gap_formatted = format_time_gap(det_analysis.get('education_to_job_gap', 'N/A'))
+    edu_gap_formatted = format_time_gap(det_analysis.get('education_to_job_gap', 'Seamless Transition'))
 
     st.info(
         f"**Conclusion Status:** {conclusion_html}\n\n"
@@ -688,7 +694,7 @@ if st.session_state.evaluation_results is not None:
     with col_g2:
         st.markdown("#### 🎓 Education & Transition Gaps")
         edu_gaps_list = det_analysis.get("education_gaps", ["No education gaps found"])
-        edu_to_job_raw = det_analysis.get("education_to_job_gap", "N/A")
+        edu_to_job_raw = det_analysis.get("education_to_job_gap", "Seamless Transition")
         edu_to_job_formatted = format_time_gap(edu_to_job_raw)
         
         if isinstance(edu_gaps_list, list) and len(edu_gaps_list) > 0:
