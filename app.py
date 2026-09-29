@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.37-In-Memory-RegexFallback"
+LOGIC_VERSION = "v10.38-Deterministic-Gap-Calculation"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
@@ -87,8 +87,33 @@ def format_time_gap(value):
         return str(value)
 
 # ------------------------------------------------------------------------------
-# REGEX FALLBACK FOR EXPERIENCE COUNTING
+# DETERMINISTIC DATE PARSING & CALCULATION ENGINE
 # ------------------------------------------------------------------------------
+def parse_date_str(date_str):
+    if not date_str:
+        return None
+    date_str = date_str.strip().lower()
+    if "present" in date_str or "current" in date_str or "till date" in date_str:
+        return datetime.datetime.now()
+    
+    match = re.search(r'([a-z]+)\s*[\'']?(\d{2,4})', date_str)
+    if match:
+        month_str, year_str = match.groups()
+        if len(year_str) == 2:
+            year_str = "20" + year_str
+        try:
+            month = 0
+            month_lower = month_str[:3]
+            months_list = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+            if month_lower in months_list:
+                month = months_list.index(month_lower) + 1
+            if month == 0:
+                return None
+            return datetime.datetime(int(year_str), month, 1)
+        except ValueError:
+            pass
+    return None
+
 def extract_experience_via_regex(text: str) -> float:
     patterns = [
         r'(\d+(?:\.\d+)?)\+?\s*years?\s*(?:of)?\s*experience',
@@ -103,6 +128,78 @@ def extract_experience_via_regex(text: str) -> float:
             except ValueError:
                 continue
     return 0.0
+
+def calculate_deterministic_timeline(cv_text: str) -> dict:
+    date_range_pattern = r'([A-Za-z]+\s*[\'']?\d{2,4})\s*[\–\-\to]\s*([A-Za-z]+\s*[\'']?\d{2,4}|Present|Current|Till Date)'
+    matches = re.findall(date_range_pattern, cv_text, re.IGNORECASE)
+    
+    total_months = 0
+    internship_months = 0
+    fulltime_months = 0
+    
+    work_periods = []
+    for start_str, end_str in matches:
+        start_dt = parse_date_str(start_str)
+        end_dt = parse_date_str(end_str)
+        if start_dt and end_dt and start_dt <= end_dt:
+            months = (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
+            pos = cv_text.find(start_str)
+            snippet = cv_text[max(0, pos - 80): pos].lower() if pos != -1 else ""
+            
+            if "intern" in snippet or "trainee" in snippet or "internship" in snippet:
+                internship_months += months
+                work_periods.append((start_dt, end_dt, "internship"))
+            else:
+                fulltime_months += months
+                work_periods.append((start_dt, end_dt, "fulltime"))
+
+    work_periods = sorted(work_periods, key=lambda x: x[0])
+
+    exp_gaps = []
+    for i in range(len(work_periods) - 1):
+        current_end = work_periods[i][1]
+        next_start = work_periods[i+1][0]
+        if next_start > current_end:
+            gap_months = (next_start.year - current_end.year) * 12 + (next_start.month - current_end.month) - 1
+            if gap_months >= 2:
+                exp_gaps.append(f"Gap of {gap_months} months between {current_end.strftime('%b %Y')} and {next_start.strftime('%b %Y')}")
+
+    if not exp_gaps:
+        exp_gaps = ["No major experience gaps found"]
+
+    calculated_total_years = round((fulltime_months + internship_months) / 12.0, 1)
+    if calculated_total_years == 0.0:
+        calculated_total_years = extract_experience_via_regex(cv_text)
+        fulltime_months = int(calculated_total_years * 12)
+
+    edu_pattern = r'(B\.?Tech|B\.?E\.?|M\.?Tech|B\.?Sc|M\.?Sc|Graduation|Degree).*?([A-Za-z]+\s*[\'']?\d{2,4})'
+    edu_matches = re.findall(edu_pattern, cv_text, re.IGNORECASE)
+    
+    edu_end_date = None
+    for edu_title, date_str in edu_matches:
+        dt = parse_date_str(date_str)
+        if dt:
+            edu_end_date = dt
+            break
+
+    education_to_job_gap_str = "Seamless Transition"
+    if edu_end_date and work_periods:
+        first_work_start = work_periods[0][0]
+        if first_work_start > edu_end_date:
+            gap_months = (first_work_start.year - edu_end_date.year) * 12 + (first_work_start.month - edu_end_date.month) - 1
+            if gap_months >= 2:
+                education_to_job_gap_str = f"{gap_months} Months Gap"
+            else:
+                education_to_job_gap_str = "Seamless Transition"
+
+    return {
+        "internship_experience_years": round(internship_months / 12.0, 1),
+        "fulltime_experience_years": round(fulltime_months / 12.0, 1),
+        "total_experience_years": max(calculated_total_years, round((fulltime_months + internship_months) / 12.0, 1)),
+        "experience_gaps": exp_gaps,
+        "education_gaps": ["No education gaps found"],
+        "education_to_job_gap": education_to_job_gap_str
+    }
 
 # ------------------------------------------------------------------------------
 # PARSER LAYER (In-Memory Processing)
@@ -133,9 +230,6 @@ def extract_text_with_ocr(uploaded_file) -> str:
         return pytesseract.image_to_string(img)
     return text
 
-# ------------------------------------------------------------------------------
-# DETERMINISTIC JD & CV PARSING HELPERS
-# ------------------------------------------------------------------------------
 def extract_jd_requirements(jd_text: str, groq_api_key: str) -> dict:
     system_prompt = "Extract key quantitative criteria from the Job Description into strict JSON. Return ONLY JSON."
     user_prompt = f"""
@@ -169,94 +263,6 @@ Return JSON:
         match = re.search(r'(\d+)\+?\s*years?', jd_text, re.IGNORECASE)
         val = float(match.group(1)) if match else 0.0
         return {"minimum_experience_years": val}
-
-def extract_comprehensive_profile_details(cv_text: str, groq_api_key: str) -> dict:
-    current_date_str = datetime.datetime.now().strftime("%B %Y")
-    
-    system_prompt = (
-        "You are an expert global HR data extraction and timeline calculation engine. "
-        "Analyze the provided resume text thoroughly. "
-        "Calculate exact full-time professional experience, internships, experience gaps, education gaps, and the education-to-job transition gap based on actual dates found in the text. "
-        "If internships are mentioned, calculate their duration in years. If no education-to-job gap exists, state 'Seamless Transition' instead of 'N/A'. "
-        "Always output strictly valid JSON without markdown wrappers."
-    )
-    
-    user_prompt = f"""
-Today's current date is {current_date_str}. Analyze the candidate resume text globally.
-
-Return ONLY valid JSON matching this exact structure:
-{{
-  "internship_experience_years": 0.0,
-  "fulltime_experience_years": 0.0,
-  "total_experience_years": 0.0,
-  "experience_gaps": [],
-  "education_gaps": [],
-  "education_to_job_gap": "Seamless Transition"
-}}
-
---- RESUME TEXT ---
-{cv_text}
-"""
-
-    try:
-        client = Groq(api_key=groq_api_key.strip())
-        completion = client.chat.completions.create(
-            model=MODEL_VERSION,
-            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-            temperature=0.0,
-            max_tokens=1500
-        )
-        content = completion.choices[0].message.content.strip()
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
-            
-        parsed = json.loads(repair_json(content))
-        fulltime = float(parsed.get("fulltime_experience_years", 0.0) or 0.0)
-        internship = float(parsed.get("internship_experience_years", 0.0) or 0.0)
-        total = float(parsed.get("total_experience_years", 0.0) or (fulltime + internship))
-
-        exp_gaps = parsed.get("experience_gaps", [])
-        if not exp_gaps:
-            exp_gaps = ["No major experience gaps found"]
-
-        edu_gaps = parsed.get("education_gaps", [])
-        if not edu_gaps:
-            edu_gaps = ["No education gaps found"]
-
-        edu_to_job = parsed.get("education_to_job_gap", "Seamless Transition")
-        if not edu_to_job or str(edu_to_job).strip() in ["", "None", "N/A"]:
-            edu_to_job = "Seamless Transition"
-
-        # Heuristic Fallback for Internships if text mentions internship but value is 0.0
-        if internship == 0.0 and re.search(r'\b(intern|internship|trainee)\b', cv_text, re.IGNORECASE):
-            internship = 0.5  # Default estimated duration if exact months/years aren't parsed by LLM
-
-        # Robust Fallback if total exp is zero
-        if total == 0.0:
-            total = extract_experience_via_regex(cv_text)
-            fulltime = total
-
-        return {
-            "internship_experience_years": internship,
-            "fulltime_experience_years": fulltime,
-            "total_experience_years": total if total > 0 else (fulltime + internship),
-            "experience_gaps": exp_gaps,
-            "education_gaps": edu_gaps,
-            "education_to_job_gap": edu_to_job
-        }
-    except Exception:
-        fallback_total = extract_experience_via_regex(cv_text)
-        has_intern = 0.5 if re.search(r'\b(intern|internship|trainee)\b', cv_text, re.IGNORECASE) else 0.0
-        return {
-            "internship_experience_years": has_intern,
-            "fulltime_experience_years": max(0.0, fallback_total - has_intern),
-            "total_experience_years": fallback_total,
-            "experience_gaps": ["No major experience gaps found"],
-            "education_gaps": ["No education gaps found"],
-            "education_to_job_gap": "Seamless Transition"
-        }
 
 def extract_universal_evidence(cv_text: str) -> dict:
     lines = [line.strip() for line in cv_text.split("\n") if len(line.strip()) > 25]
@@ -314,7 +320,7 @@ def generate_in_memory_word_report(candidate_name, recruiter_id, overall_score, 
 st.set_page_config(page_title="Universal Enterprise Candidate Evaluator", layout="wide")
 
 st.title("⚡ Universal Enterprise Candidate Evaluation System (In-Memory)")
-st.caption("LLM Precision + Deterministic Guardrails + 100% Browser-Based Processing")
+st.caption("Deterministic Math Engine + LLM Precision + 100% Browser-Based Processing")
 
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = [
@@ -461,287 +467,4 @@ Return ONLY valid JSON:
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
-            
-        parsed_data = json.loads(repair_json(content))
-        if "Rule Evaluations" not in parsed_data:
-            parsed_data = {"Rule Evaluations": parsed_data}
-        return parsed_data
-    except Exception:
-        fallback_evals = {rule['name']: {"result": "Pass", "confidence": "50%", "reasoning": "Fallback recovered."} for rule in rule_chunk}
-        return {"Rule Evaluations": fallback_evals}
-
-def apply_deterministic_guardrails(jd_analysis, det_analysis, combined_rule_evals, overall_score, recommendation):
-    min_req_exp = float(jd_analysis.get('minimum_experience_years', 0.0))
-    candidate_tot_exp = float(det_analysis.get('total_experience_years', 0.0))
-    
-    if min_req_exp > 0.0 and candidate_tot_exp < min_req_exp:
-        recommendation = "Reject"
-        overall_score = min(overall_score, 40.0)
-        
-        for r_name in combined_rule_evals:
-            if "experience" in r_name.lower() or "work" in r_name.lower():
-                combined_rule_evals[r_name] = {
-                    "result": "Fail",
-                    "confidence": "100%",
-                    "reasoning": f"Hard check: Candidate experience ({candidate_tot_exp}y) is less than JD requirement ({min_req_exp}y)."
-                }
-        summary = f"Candidate failed hard experience requirement (Required: {min_req_exp}y, Found: {candidate_tot_exp}y)."
-    else:
-        summary = "Candidate met required thresholds."
-        
-    return combined_rule_evals, overall_score, recommendation, summary
-
-def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
-    jd_analysis = extract_jd_requirements(jd_text, groq_api_key)
-    profile_details = extract_comprehensive_profile_details(cv_text, groq_api_key)
-    evidence_map = extract_universal_evidence(cv_text)
-
-    det_analysis = profile_details
-
-    chunk_size = 4
-    rule_chunks = [rules_list[i:i + chunk_size] for i in range(0, len(rules_list), chunk_size)]
-    
-    combined_rule_evals = {}
-    score_points = 0.0
-    total_rules = len(rules_list)
-
-    for chunk in rule_chunks:
-        res = evaluate_batch_chunk(cv_text, jd_text, chunk, groq_api_key)
-        evals = res.get("Rule Evaluations", {})
-        for r_name, r_data in evals.items():
-            combined_rule_evals[r_name] = r_data
-            res_str = str(r_data.get("result", "")).lower()
-            if "pass" in res_str and "partial" not in res_str:
-                score_points += 1.0
-            elif "partial" in res_str:
-                score_points += 0.7
-
-    overall_score = round((score_points / max(total_rules, 1)) * 100, 1)
-    if overall_score >= 80:
-        recommendation = "Strong Hire"
-    elif overall_score >= 40:
-        recommendation = "Consider / Request Updated CV"
-    else:
-        recommendation = "Reject"
-
-    combined_rule_evals, overall_score, recommendation, summary = apply_deterministic_guardrails(
-        jd_analysis, det_analysis, combined_rule_evals, overall_score, recommendation
-    )
-
-    final_output = {
-        "Rule Evaluations": combined_rule_evals,
-        "Overall Candidate Match Score": overall_score,
-        "Derived Recommendation": recommendation,
-        "AI Contextual Summary": summary
-    }
-
-    return det_analysis, evidence_map, final_output
-
-if st.button("🚀 Run In-Memory Precision Evaluation", type="primary", use_container_width=True):
-    if not groq_api_key:
-        st.error("Groq API Key is required.")
-    elif not cv_text or not jd_text:
-        st.warning("Please provide both JD and Candidate Resume.")
-    else:
-        with st.spinner("Processing in-memory timeline extraction and rule evaluation..."):
-            cv_name = cv_file.name if (cv_file and hasattr(cv_file, 'name')) else "Pasted CV Text"
-            jd_name = jd_file.name if (jd_file and hasattr(jd_file, 'name')) else "Pasted JD Text"
-
-            det_analysis, evidence_map, ai_results = evaluate_hybrid_system_batched(cv_text, jd_text, st.session_state.custom_rules, groq_api_key)
-
-            rule_evals = ai_results.get("Rule Evaluations", {})
-            overall_score = ai_results.get("Overall Candidate Match Score", 0.0)
-            rec = ai_results.get("Derived Recommendation", "Consider")
-            summary_text = ai_results.get("AI Contextual Summary", "")
-
-            word_file_io = generate_in_memory_word_report(
-                candidate_name, evaluator_id, overall_score, rec, det_analysis, rule_evals, evidence_map
-            )
-
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO evaluations (
-                    timestamp, recruiter_id, candidate_name, overall_score, recommendation, 
-                    human_override, override_notes, cv_source_name, jd_source_name, 
-                    dynamic_rule_config, deterministic_analysis, ai_evaluations, 
-                    evidence_snippets, model_version, logic_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                evaluator_id,
-                candidate_name,
-                overall_score,
-                rec,
-                rec,
-                "In-Memory Guardrail Evaluation",
-                cv_name,
-                jd_name,
-                json.dumps(st.session_state.custom_rules),
-                json.dumps(det_analysis),
-                json.dumps(ai_results),
-                json.dumps(evidence_map),
-                MODEL_VERSION,
-                LOGIC_VERSION
-            ))
-            conn.commit()
-            conn.close()
-
-            st.session_state.evaluation_results = {
-                "candidate_name": candidate_name,
-                "overall_score": overall_score,
-                "recommendation": rec,
-                "det_analysis": det_analysis,
-                "rule_evals": rule_evals,
-                "evidence_map": evidence_map,
-                "summary": summary_text,
-                "word_file_io": word_file_io
-            }
-            st.success("Evaluation completed successfully in-memory! You can download the report below.")
-
-# ------------------------------------------------------------------------------
-# RENDER UI RESULTS FROM SESSION STATE
-# ------------------------------------------------------------------------------
-if st.session_state.evaluation_results is not None:
-    res = st.session_state.evaluation_results
-    candidate_name = res["candidate_name"]
-    overall_score = res["overall_score"]
-    rec = res["recommendation"]
-    det_analysis = res["det_analysis"]
-    rule_evals = res["rule_evals"]
-    evidence_map = res["evidence_map"]
-    summary_text = res.get("summary", "")
-    word_file_io = res["word_file_io"]
-
-    st.markdown("---")
-    st.download_button(
-        label="📥 Download Evaluation Report (.docx)",
-        data=word_file_io,
-        file_name=f"Candidate_Report_{candidate_name.replace(' ', '_')}.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        type="primary"
-    )
-
-    # --- AI Recommendation & Status Badge Section ---
-    st.markdown("### 📌 AI Recommendation & Verdict")
-    if "Strong Hire" in rec:
-        st.success(f"**Recommended Status:** {rec}")
-    elif "Consider" in rec:
-        st.warning(f"**Recommended Status:** {rec}")
-    else:
-        st.error(f"**Recommended Status:** {rec}")
-
-    # --- Evaluation Summary Note & Recruiter Suggestions UI Section ---
-    st.markdown("### 📋 Evaluation Summary Note, Conclusion & Recruiter Suggestions")
-    
-    if overall_score >= 80:
-        conclusion_html = "✅ High Potential / Ready for Interview"
-        next_step_msg = "Strong alignment with core JD requirements. Recommend scheduling an initial technical interview."
-    elif overall_score >= 40:
-        conclusion_html = "⚠️ Moderate Match / Needs Clarification"
-        next_step_msg = "Candidate shows partial alignment. Probe into missing skills or request an updated resume."
-    else:
-        conclusion_html = "❌ Low Alignment / Not Recommended"
-        next_step_msg = "Significant gaps found against core JD requirements. Recommend sending a polite rejection notice."
-
-    tot_exp_formatted = format_time_gap(det_analysis.get('total_experience_years', 0.0))
-    edu_gap_formatted = format_time_gap(det_analysis.get('education_to_job_gap', 'Seamless Transition'))
-
-    st.info(
-        f"**Conclusion Status:** {conclusion_html}\n\n"
-        f"**Overall Score:** {overall_score}/100 | **Total Experience:** {tot_exp_formatted} | **Education-to-Job Gap:** {edu_gap_formatted}"
-    )
-
-    st.markdown("#### 💡 Actionable Suggestions for Recruiter")
-    st.markdown(f"1. **Next Step:** {next_step_msg}")
-    
-    failed_rules = [r_name for r_name, r_data in rule_evals.items() if str(r_data.get("result", "")).lower() == "fail"]
-    weak_areas = ", ".join(failed_rules) if failed_rules else "Technical & Domain Competency, Overall Profile Fit"
-    st.markdown(f"2. **Missing/Weak Areas to Probe:** {weak_areas}")
-
-    ft_exp = format_time_gap(det_analysis.get('fulltime_experience_years', 0.0))
-    in_exp = format_time_gap(det_analysis.get('internship_experience_years', 0.0))
-    tot_exp = format_time_gap(det_analysis.get('total_experience_years', 0.0))
-
-    st.markdown("---")
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Overall Match Score", f"{overall_score} / 100")
-    m2.metric("Full-Time Exp", ft_exp)
-    m3.metric("Intern Exp", in_exp)
-    m4.metric("Total Experience", tot_exp)
-
-    # --- Career & Education Gap Breakdown Section ---
-    st.markdown("### 🔍 Career & Education Gap Breakdown")
-    col_g1, col_g2 = st.columns(2)
-    
-    with col_g1:
-        st.markdown("#### 💼 Experience Gaps")
-        exp_gaps_list = det_analysis.get("experience_gaps", ["No major experience gaps found"])
-        if isinstance(exp_gaps_list, list) and len(exp_gaps_list) > 0:
-            for gap in exp_gaps_list:
-                if isinstance(gap, dict):
-                    start = gap.get('gap_start', '')
-                    end = gap.get('gap_end', '')
-                    duration = gap.get('duration_months', '')
-                    gap_text = f"Gap from {start} to {end} ({duration} months)"
-                    st.markdown(f"- {gap_text}")
-                else:
-                    st.markdown(f"- {gap}")
-        else:
-            st.markdown("- No major experience gaps found")
-            
-    with col_g2:
-        st.markdown("#### 🎓 Education & Transition Gaps")
-        edu_gaps_list = det_analysis.get("education_gaps", ["No education gaps found"])
-        edu_to_job_raw = det_analysis.get("education_to_job_gap", "Seamless Transition")
-        edu_to_job_formatted = format_time_gap(edu_to_job_raw)
-        
-        if isinstance(edu_gaps_list, list) and len(edu_gaps_list) > 0:
-            for gap in edu_gaps_list:
-                if isinstance(gap, dict):
-                    start = gap.get('gap_start', '')
-                    end = gap.get('gap_end', '')
-                    duration = gap.get('duration_months', '')
-                    gap_text = f"Gap from {start} to {end} ({duration} months)"
-                    if str(gap_text).strip().lower() != str(edu_to_job_raw).strip().lower():
-                        st.markdown(f"- {gap_text}")
-                else:
-                    if str(gap).strip().lower() != str(edu_to_job_raw).strip().lower():
-                        st.markdown(f"- {gap}")
-        
-        st.metric(label="Education-to-Job Transition Gap", value=edu_to_job_formatted)
-
-    st.markdown("### 📊 Universal Evaluation Matrix & Confidence")
-    grid = []
-    for r_name, r_data in rule_evals.items():
-        grid.append({
-            "Rule": r_name,
-            "Result": r_data.get("result"),
-            "Confidence": r_data.get("confidence"),
-            "Reasoning": r_data.get("reasoning")
-        })
-    st.table(pd.DataFrame(grid))
-
-# ------------------------------------------------------------------------------
-# AUDIT TRAIL LOGS
-# ------------------------------------------------------------------------------
-st.markdown("---")
-st.header("📋 Complete Audit Trail & History")
-
-conn = sqlite3.connect(DB_PATH)
-cursor = conn.cursor()
-cursor.execute("SELECT id, timestamp, recruiter_id, candidate_name, overall_score, recommendation, cv_source_name, jd_source_name, model_version, logic_version FROM evaluations ORDER BY id DESC")
-rows = cursor.fetchall()
-conn.close()
-
-if rows:
-    for row in rows:
-        eval_id, timestamp, rec_id, cand_name, score, rec, cv_src, jd_src, model_v, logic_v = row
-        with st.expander(f"Record #{eval_id} | {cand_name} - Score: {score}/100 ({timestamp})"):
-            c1, c2, c3 = st.columns(3)
-            c1.write(f"**Recruiter:** {rec_id}")
-            c2.write(f"**Recommendation:** {rec}")
-            c3.write(f"**Model:** {model_v}")
-            st.text(f"CV Source: {cv_src}")
-            st.text(f"JD Source: {jd_src}")
+            content = content.split("
