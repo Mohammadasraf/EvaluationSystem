@@ -24,8 +24,8 @@ except ImportError:
 STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDS = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
-MODEL_VERSION = "llama-3.1-8b-instant"  # Updated to universally supported Groq Model
-LOGIC_VERSION = "v10.2-Precision-Experience-UI"
+MODEL_VERSION = "openai/gpt-oss-20b"  # Updated to currently active Groq standard model ID
+LOGIC_VERSION = "v10.4-Precision-Experience-UI"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
 os.makedirs(STORAGE_JDS, exist_ok=True)
@@ -162,7 +162,7 @@ Return ONLY valid JSON format matching this exact structure:
                 "internship_experience_years": 0.0,
                 "fulltime_experience_years": 0.0,
                 "total_experience_years": 0.0,
-                "experience_gaps": [f"API Error ({response.status_code})"],
+                "experience_gaps": [f"API Error ({response.status_code}): {response.text}"],
                 "education_gaps": ["API Error"],
                 "education_to_job_gap": "Unable to calculate"
             }
