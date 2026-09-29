@@ -9,7 +9,7 @@ import docx
 import pandas as pd
 import streamlit as st
 from PIL import Image
-import requests
+from groq import Groq
 
 # Optional OCR import handling
 try:
@@ -25,7 +25,7 @@ STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDS = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.5-Precision-JSON-Fix"
+LOGIC_VERSION = "v10.6-Groq-SDK-Fix"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
 os.makedirs(STORAGE_JDS, exist_ok=True)
@@ -103,7 +103,7 @@ def save_archived_file(uploaded_file, folder: str, prefix: str) -> str:
     return file_path
 
 # ------------------------------------------------------------------------------
-# LLM-POWERED COMPREHENSIVE EXTRACTION ENGINE (WITH SEPARATED EXPERIENCE)
+# LLM-POWERED COMPREHENSIVE EXTRACTION ENGINE (USING GROQ SDK)
 # ------------------------------------------------------------------------------
 def extract_comprehensive_profile_details(cv_text: str, groq_api_key: str) -> dict:
     current_date_str = datetime.datetime.now().strftime("%B %Y")
@@ -132,41 +132,17 @@ CRITICAL: Return ONLY valid JSON format with NO markdown wrapping (like ```json)
 {cv_text}
 """
 
-    headers = {
-        "Authorization": f"Bearer {groq_api_key}",
-        "Content-Type": "application/json"
-    }
-    
-    payload = {
-        "model": MODEL_VERSION,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.0,
-        "max_tokens": 600
-    }
-
     try:
-        response = requests.post(
-            "[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)",
-            headers=headers,
-            json=payload,
-            timeout=30,
-            verify=False
+        client = Groq(api_key=groq_api_key)
+        completion = client.chat.completions.create(
+            model=MODEL_VERSION,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=600
         )
-        
-        if response.status_code == 200:
-            content = response.json()["choices"][0]["message"]["content"]
-            # Clean potential markdown wrappers
-            content = content.replace("```json", "").replace("```", "").strip()
-            return json.loads(content)
-        else:
-            return {
-                "internship_experience_years": 0.0,
-                "fulltime_experience_years": 0.0,
-                "total_experience_years": 0.0,
-                "experience_gaps": [f"API Error ({response.status_code}): {response.text}"],
-                "education_gaps": ["API Error"],
-                "education_to_job_gap": "Unable to calculate"
-            }
+        content = completion.choices[0].message.content
+        content = content.replace("```json", "").replace("```", "").strip()
+        return json.loads(content)
     except Exception as e:
         return {
             "internship_experience_years": 0.0,
@@ -345,7 +321,7 @@ st.session_state.custom_rules = rules_to_keep
 st.markdown("---")
 
 # ------------------------------------------------------------------------------
-# BATCHED EVALUATION ENGINE WITH LLM EXTRACTION
+# BATCHED EVALUATION ENGINE WITH GROQ SDK
 # ------------------------------------------------------------------------------
 def evaluate_batch_chunk(cv_text, jd_text, rule_chunk, groq_api_key):
     prompt = f"""
@@ -368,32 +344,15 @@ CRITICAL: Return ONLY valid JSON format with NO markdown wrappers (like ```json)
 }}
 """
 
-    headers = {
-        "Authorization": f"Bearer {groq_api_key}",
-        "Content-Type": "application/json"
-    }
-    
-    payload = {
-        "model": MODEL_VERSION,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.1,
-        "max_tokens": 700
-    }
-
     try:
-        response = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=30,
-            verify=False
+        client = Groq(api_key=groq_api_key)
+        completion = client.chat.completions.create(
+            model=MODEL_VERSION,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=700
         )
-        
-        if response.status_code != 200:
-            return {"Error": f"Groq API Error ({response.status_code}): {response.text}"}
-            
-        res_json = response.json()
-        content = res_json["choices"][0]["message"]["content"]
+        content = completion.choices[0].message.content
         content = content.replace("```json", "").replace("```", "").strip()
         return json.loads(content)
     except Exception as e:
@@ -491,7 +450,6 @@ if st.button("🚀 Run Precision Evaluation", type="primary", use_container_widt
                 conn.commit()
                 conn.close()
 
-                # Store into Session State to avoid UI hiding on re-run / download
                 st.session_state.evaluation_results = {
                     "candidate_name": candidate_name,
                     "overall_score": overall_score,
@@ -525,7 +483,6 @@ if st.session_state.evaluation_results is not None:
         type="primary"
     )
 
-    # Metrics Display with Separated Experience
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Overall Match Score", f"{overall_score} / 100")
     m2.metric("AI Recommendation", rec)
@@ -533,7 +490,6 @@ if st.session_state.evaluation_results is not None:
     m4.metric("Intern Exp", f"{det_analysis.get('internship_experience_years', 0.0)} Yrs")
     m5.metric("Total Experience", f"{det_analysis.get('total_experience_years', 0.0)} Yrs")
 
-    # Detailed Gaps View
     st.markdown("### 🔍 Career & Education Gaps Breakdown")
     g1, g2 = st.columns(2)
     with g1:
