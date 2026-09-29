@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.30-In-Memory-CleanGaps"
+LOGIC_VERSION = "v10.31-In-Memory-StrictTransitionGap"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
@@ -79,6 +79,7 @@ def format_time_gap(value):
             else:
                 return f"{months} Months"
     except (ValueError, TypeError):
+        # Handle string formats like "11 months" or "N/A"
         return str(value)
 
 # ------------------------------------------------------------------------------
@@ -152,8 +153,9 @@ def extract_comprehensive_profile_details(cv_text: str, groq_api_key: str) -> di
     
     system_prompt = (
         "You are an expert global HR data extraction and timeline calculation engine. "
+        "Analyze the provided resume text thoroughly. "
         "Calculate exact full-time professional experience, internships, experience gaps, education gaps, and the education-to-job transition gap based on actual dates found in the text. "
-        "For experience gaps, provide clear details if present. "
+        "CRITICAL INSTRUCTION FOR EDUCATION-TO-JOB GAP: Look closely at the graduation/passing year of the highest/last degree and the start date of the very first professional full-time job. Calculate the exact time difference (e.g., '6 months' or '0.5 Yrs'). If graduation year and first job start date are both present, you MUST calculate this gap instead of returning 'N/A'. Only return 'N/A' if education or employment dates are completely missing. "
         "Always output strictly valid JSON without markdown wrappers."
     )
     
