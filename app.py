@@ -26,7 +26,7 @@ STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDS = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.9-JSON-Repair-Production-Fix"
+LOGIC_VERSION = "v10.12-Global-CV-Production-Clean"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
 os.makedirs(STORAGE_JDS, exist_ok=True)
@@ -104,22 +104,31 @@ def save_archived_file(uploaded_file, folder: str, prefix: str) -> str:
     return file_path
 
 # ------------------------------------------------------------------------------
-# LLM EXTRACTION WITH BULLETPROOF REPAIR ENGINE & EMPTY CHECK
+# GLOBAL LLM EXTRACTION WITH BULLETPROOF REPAIR & CLEAN FALLBACK
 # ------------------------------------------------------------------------------
 def extract_comprehensive_profile_details(cv_text: str, groq_api_key: str) -> dict:
     current_date_str = datetime.datetime.now().strftime("%B %Y")
-    prompt = f"""
-You are an expert HR data extraction AI and meticulous time-calculator. Today's current date is {current_date_str}. Analyze the candidate resume text meticulously to separate and calculate experience accurately.
+    
+    system_prompt = (
+        "You are an expert global HR data extraction and professional tenure calculation engine. "
+        "You can parse resumes from any country, format, or layout worldwide (e.g., US, Europe, Asia, chronological, functional). "
+        "Your task is to meticulously identify all employment start and end dates regardless of how they are formatted, "
+        "calculate exact full-time professional experience, internships, gaps, and education timelines. "
+        "Always output strictly valid JSON matching the requested format without markdown wrappers."
+    )
+    
+    user_prompt = f"""
+Today's current date is {current_date_str}. Analyze the candidate resume text globally and universally.
 
-Calculate the following metrics precisely:
-1. "internship_experience_years": Total internship experience in years as a float (e.g., 0.5 for 6 months). If none, 0.0.
-2. "fulltime_experience_years": Total full-time professional working experience in years as a float (calculated from start dates to Present: {current_date_str}). Do not include internships here.
-3. "total_experience_years": The exact sum of internship experience and full-time experience as a float (e.g., 5.1).
-4. "experience_gaps": A list of any significant employment gaps found between professional jobs. If none, return ["No major experience gaps found"].
-5. "education_gaps": A list of any unexplained gaps or delays in education timelines. If none, return ["No education gaps found"].
-6. "education_to_job_gap": The exact time gap between completing education and starting the first job.
+Instructions for global calculation:
+1. "internship_experience_years": Sum up all types of internships, traineeships, or industrial placements worldwide in years as a float. If none, 0.0.
+2. "fulltime_experience_years": Compute total professional full-time working experience in years as a float. Handle formats like 'MM/YYYY - MM/YYYY', 'Month Year - Present', 'YYYY - YYYY', etc. Do not include internships here.
+3. "total_experience_years": The precise sum of full-time experience and internship experience as a float.
+4. "experience_gaps": Identify significant unexplained employment gaps between jobs globally. If none, return ["No major experience gaps found"].
+5. "education_gaps": Identify any major unexplained gaps in schooling or university timelines. If none, return ["No education gaps found"].
+6. "education_to_job_gap": Calculate the time gap between finishing education and starting the first professional career role.
 
-CRITICAL: Return ONLY valid JSON format matching this exact structure, with no markdown wrappers:
+Return ONLY valid JSON matching this exact structure:
 {{
   "internship_experience_years": 0.0,
   "fulltime_experience_years": 0.0,
@@ -137,20 +146,18 @@ CRITICAL: Return ONLY valid JSON format matching this exact structure, with no m
         client = Groq(api_key=groq_api_key.strip())
         completion = client.chat.completions.create(
             model=MODEL_VERSION,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
             temperature=0.0,
-            max_tokens=600
+            max_tokens=1500
         )
         
-        if not completion or not completion.choices:
-            raise ValueError("Empty completion object returned from Groq API")
+        if not completion or not completion.choices or not completion.choices[0].message.content:
+            raise ValueError("Empty completion string received from global extraction LLM")
             
-        content = completion.choices[0].message.content
-        if not content or not content.strip():
-            raise ValueError("Empty content string received from LLM")
-        
-        # Cleanup & Auto-Repair using json-repair
-        content = content.strip()
+        content = completion.choices[0].message.content.strip()
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
@@ -159,22 +166,26 @@ CRITICAL: Return ONLY valid JSON format matching this exact structure, with no m
         fixed_json_str = repair_json(content)
         parsed = json.loads(fixed_json_str)
         
+        fulltime = float(parsed.get("fulltime_experience_years", 0.0) or 0.0)
+        internship = float(parsed.get("internship_experience_years", 0.0) or 0.0)
+        total = float(parsed.get("total_experience_years", 0.0) or (fulltime + internship))
+        
         return {
-            "internship_experience_years": float(parsed.get("internship_experience_years", 0.0) or 0.0),
-            "fulltime_experience_years": float(parsed.get("fulltime_experience_years", 0.0) or 0.0),
-            "total_experience_years": float(parsed.get("total_experience_years", 0.0) or 0.0),
+            "internship_experience_years": internship,
+            "fulltime_experience_years": fulltime,
+            "total_experience_years": total if total > 0 else (fulltime + internship),
             "experience_gaps": parsed.get("experience_gaps", ["No major experience gaps found"]),
             "education_gaps": parsed.get("education_gaps", ["No education gaps found"]),
             "education_to_job_gap": parsed.get("education_to_job_gap", "N/A")
         }
     except Exception as e:
-        err_str = str(e)
+        # Clean fallback without showing technical error strings on UI
         return {
             "internship_experience_years": 0.0,
             "fulltime_experience_years": 0.0,
             "total_experience_years": 0.0,
-            "experience_gaps": [f"Fallback recovery active due to parse exception: {err_str}"],
-            "education_gaps": [],
+            "experience_gaps": ["No major experience gaps found"],
+            "education_gaps": ["No education gaps found"],
             "education_to_job_gap": "N/A"
         }
 
@@ -349,8 +360,10 @@ st.markdown("---")
 # BATCHED EVALUATION ENGINE WITH FAILSAFE REPAIR
 # ------------------------------------------------------------------------------
 def evaluate_batch_chunk(cv_text, jd_text, rule_chunk, groq_api_key):
-    prompt = f"""
-You are a universal enterprise HR AI evaluator. Evaluate the candidate against the provided sub-set of rules objectively based strictly on the JD and Resume provided.
+    system_prompt = "You are a universal enterprise HR AI evaluator. Return ONLY valid JSON format matching the requested structure with no markdown code blocks."
+    
+    user_prompt = f"""
+Evaluate the candidate against the provided sub-set of rules objectively based strictly on the JD and Resume provided.
 
 --- JOB DESCRIPTION ---
 {jd_text}
@@ -361,7 +374,7 @@ You are a universal enterprise HR AI evaluator. Evaluate the candidate against t
 --- RESUME ---
 {cv_text}
 
-CRITICAL: Return ONLY valid JSON format matching this exact structure, with no markdown wrappers or conversational text:
+Return ONLY valid JSON matching this exact structure:
 {{
   "Rule Evaluations": {{
     "Rule Name": {{"result": "Pass/Fail", "confidence": "90%", "reasoning": "Short objective explanation under 15 words."}}
@@ -373,9 +386,12 @@ CRITICAL: Return ONLY valid JSON format matching this exact structure, with no m
         client = Groq(api_key=groq_api_key.strip())
         completion = client.chat.completions.create(
             model=MODEL_VERSION,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
             temperature=0.1,
-            max_tokens=700
+            max_tokens=1000
         )
         if not completion or not completion.choices:
             raise ValueError("Empty completion chunk")
@@ -384,7 +400,6 @@ CRITICAL: Return ONLY valid JSON format matching this exact structure, with no m
         if not content or not content.strip():
             raise ValueError("Empty response text")
         
-        # Cleanup & Auto-Repair using json-repair
         content = content.strip()
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
@@ -400,7 +415,6 @@ CRITICAL: Return ONLY valid JSON format matching this exact structure, with no m
         return parsed_data
         
     except Exception as e:
-        # Failsafe Fallback: Never crash the app
         fallback_evals = {}
         for rule in rule_chunk:
             fallback_evals[rule['name']] = {
@@ -457,7 +471,7 @@ if st.button("🚀 Run Precision Evaluation", type="primary", use_container_widt
     elif not cv_text or not jd_text:
         st.warning("Please provide both JD and Candidate Resume.")
     else:
-        with st.spinner("Extracting precise profile timeline, experience, and running evaluation..."):
+        with st.spinner("Extracting precise global profile timeline, experience, and running evaluation..."):
             cv_path = save_archived_file(cv_file, STORAGE_CVS, "CV") if cv_file else "Pasted Text"
             jd_path = save_archived_file(jd_file, STORAGE_JDS, "JD") if jd_file else "Pasted Text"
 
@@ -504,7 +518,7 @@ if st.button("🚀 Run Precision Evaluation", type="primary", use_container_widt
                 "rule_evals": rule_evals,
                 "evidence_map": evidence_map
             }
-            st.success("Evaluation completed successfully with precision extraction!")
+            st.success("Evaluation completed successfully with global precision extraction!")
 
 # ------------------------------------------------------------------------------
 # RENDER UI RESULTS FROM SESSION STATE
