@@ -26,7 +26,7 @@ STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDS = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.14-Global-CV-Smart-Resend-Enhanced"
+LOGIC_VERSION = "v10.12-Global-CV-Production-Clean"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
 os.makedirs(STORAGE_JDS, exist_ok=True)
@@ -179,6 +179,7 @@ Return ONLY valid JSON matching this exact structure:
             "education_to_job_gap": parsed.get("education_to_job_gap", "N/A")
         }
     except Exception as e:
+        # Clean fallback without showing technical error strings on UI
         return {
             "internship_experience_years": 0.0,
             "fulltime_experience_years": 0.0,
@@ -448,9 +449,9 @@ def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
     if overall_score >= 80:
         recommendation = "Strong Hire"
         summary = "Candidate successfully met the vast majority of evaluated criteria."
-    elif overall_score >= 40:
-        recommendation = "Consider / Request Updated CV"
-        summary = "Candidate met several criteria or has partial/transferable background requiring resume refinement."
+    elif overall_score >= 50:
+        recommendation = "Consider"
+        summary = "Candidate met several criteria but requires verification on specific areas."
     else:
         recommendation = "Reject"
         summary = "Candidate fell short on critical rule thresholds."
@@ -579,15 +580,10 @@ if st.session_state.evaluation_results is not None:
     if overall_score >= 80:
         conclusion_status = "✅ High Potential / Ready for Interview"
         action_suggestion = "Proceed directly to technical or HR interview rounds. Candidate demonstrates strong alignment with job requirements."
-    elif overall_score >= 40:
-        conclusion_status = "⚠️ Moderate Match / Partial Skill Alignment"
+    elif overall_score >= 50:
+        conclusion_status = "⚠️ Moderate Match / Needs Clarification"
         if failed_rules:
-            action_suggestion = (
-                f"Candidate shows strong transferable experience or partial domain matches (e.g., related tech stacks like MVC), "
-                f"but specific required keywords/areas ({', '.join(failed_rules)}) are missing or unlisted in the current resume. "
-                f"\n\n💡 **Recruiter Action Advice:** Do not reject immediately. **Ask the candidate to update and resend their CV** "
-                f"with proper skill alignment and missing tool keywords highlighted."
-            )
+            action_suggestion = f"Candidate shows promise in overall background, but specific required areas (e.g., {', '.join(failed_rules)}) are missing or unclear in the CV."
         else:
             action_suggestion = "Candidate meets basic criteria but requires a quick screening call to verify depth of experience."
     else:
@@ -599,7 +595,7 @@ if st.session_state.evaluation_results is not None:
     st.markdown("#### 💡 Actionable Suggestions for Recruiter")
     st.markdown(f"""
     1. **Next Step:** {action_suggestion}
-    2. **Missing/Weak Areas to Probe / Request Update:** {', '.join(failed_rules) if failed_rules else 'None identified. All evaluated criteria passed successfully.'}
+    2. **Missing/Weak Areas to Probe:** {', '.join(failed_rules) if failed_rules else 'None identified. All evaluated criteria passed successfully.'}
     """)
 
 # ------------------------------------------------------------------------------
