@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.31-In-Memory-StrictTransitionGap"
+LOGIC_VERSION = "v10.32-In-Memory-AccurateMonths"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
@@ -69,17 +69,21 @@ init_db()
 # ------------------------------------------------------------------------------
 def format_time_gap(value):
     try:
+        if isinstance(value, str) and not value.replace('.', '', 1).isdigit():
+            return value
+            
         val = float(value)
-        if val >= 1.0:
-            return f"{val:.1f} Yrs"
-        else:
+        if val < 1.0 and val > 0:
             months = round(val * 12)
             if months <= 1:
                 return f"{months} Month"
             else:
                 return f"{months} Months"
+        elif val >= 1.0:
+            return f"{val:.1f} Yrs"
+        else:
+            return str(value)
     except (ValueError, TypeError):
-        # Handle string formats like "11 months" or "N/A"
         return str(value)
 
 # ------------------------------------------------------------------------------
@@ -155,7 +159,7 @@ def extract_comprehensive_profile_details(cv_text: str, groq_api_key: str) -> di
         "You are an expert global HR data extraction and timeline calculation engine. "
         "Analyze the provided resume text thoroughly. "
         "Calculate exact full-time professional experience, internships, experience gaps, education gaps, and the education-to-job transition gap based on actual dates found in the text. "
-        "CRITICAL INSTRUCTION FOR EDUCATION-TO-JOB GAP: Look closely at the graduation/passing year of the highest/last degree and the start date of the very first professional full-time job. Calculate the exact time difference (e.g., '6 months' or '0.5 Yrs'). If graduation year and first job start date are both present, you MUST calculate this gap instead of returning 'N/A'. Only return 'N/A' if education or employment dates are completely missing. "
+        "CRITICAL INSTRUCTION FOR EDUCATION-TO-JOB GAP: Look at the graduation/passing month and year of the degree and the start date of the very first job. Calculate the exact difference in months (e.g., '11 months' or '6 months'). DO NOT use imprecise fractional decimal years like 1.42 Yrs; always express gaps under 2 years in clear month counts if they are measured in months. "
         "Always output strictly valid JSON without markdown wrappers."
     )
     
