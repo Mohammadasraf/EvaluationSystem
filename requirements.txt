@@ -6,3 +6,4 @@ pandas
 pillow
 pytesseract
 requests
+json-repair
