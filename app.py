@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.24-In-Memory-SafePaste"
+LOGIC_VERSION = "v10.25-In-Memory-FixedPaste"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
@@ -152,12 +152,12 @@ def extract_comprehensive_profile_details(cv_text: str, groq_api_key: str) -> di
     
     system_prompt = (
         "You are an expert global HR data extraction engine. "
-        "Calculate exact full-time professional experience, internships, and timeline data. "
+        "Calculate exact full-time professional experience, internships, and timeline data accurately from dates. "
         "Always output strictly valid JSON without markdown wrappers."
     )
     
     user_prompt = f"""
-Today's current date is {current_date_str}. Analyze the candidate resume text globally.
+Today's current date is {current_date_str}. Analyze the candidate resume text globally and calculate years of experience.
 
 Return ONLY valid JSON matching this exact structure:
 {{
