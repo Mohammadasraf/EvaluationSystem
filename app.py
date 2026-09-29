@@ -26,7 +26,7 @@ STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDs = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.18-Guardrail-Summary-Restored"
+LOGIC_VERSION = "v10.19-GapBreakdown-Recommendation-Added"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
 os.makedirs(STORAGE_JDs, exist_ok=True)
@@ -564,7 +564,16 @@ if st.session_state.evaluation_results is not None:
         type="primary"
     )
 
-    # --- Restored Evaluation Summary Note & Recruiter Suggestions UI Section ---
+    # --- AI Recommendation & Status Badge Section ---
+    st.markdown("### 📌 AI Recommendation & Verdict")
+    if "Strong Hire" in rec:
+        st.success(f"**Recommended Status:** {rec}")
+    elif "Consider" in rec:
+        st.warning(f"**Recommended Status:** {rec}")
+    else:
+        st.error(f"**Recommended Status:** {rec}")
+
+    # --- Evaluation Summary Note & Recruiter Suggestions UI Section ---
     st.markdown("### 📋 Evaluation Summary Note, Conclusion & Recruiter Suggestions")
     
     if overall_score >= 80:
@@ -602,6 +611,28 @@ if st.session_state.evaluation_results is not None:
     m2.metric("Full-Time Exp", f"{ft_exp} Yrs")
     m3.metric("Intern Exp", f"{in_exp} Yrs")
     m4.metric("Total Experience", f"{tot_exp} Yrs")
+
+    # --- Career & Education Gap Breakdown Section Added ---
+    st.markdown("### 🔍 Career & Education Gap Breakdown")
+    col_g1, col_g2 = st.columns(2)
+    with col_g1:
+        st.markdown("**💼 Experience Gaps:**")
+        exp_gaps_list = det_analysis.get("experience_gaps", ["No major experience gaps found"])
+        if isinstance(exp_gaps_list, list):
+            for gap in exp_gaps_list:
+                st.markdown(f"- {gap}")
+        else:
+            st.markdown(f"- {exp_gaps_list}")
+            
+    with col_g2:
+        st.markdown("**🎓 Education Gaps & Timeline:**")
+        edu_gaps_list = det_analysis.get("education_gaps", ["No education gaps found"])
+        if isinstance(edu_gaps_list, list):
+            for gap in edu_gaps_list:
+                st.markdown(f"- {gap}")
+        else:
+            st.markdown(f"- {edu_gaps_list}")
+        st.markdown(f"**Education-to-Job Gap:** {edu_gap_val}")
 
     st.markdown("### 📊 Universal Evaluation Matrix & Confidence")
     grid = []
