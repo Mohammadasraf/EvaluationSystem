@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.32-In-Memory-AccurateMonths"
+LOGIC_VERSION = "v10.36-In-Memory-RegexFallback"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
@@ -85,6 +85,24 @@ def format_time_gap(value):
             return str(value)
     except (ValueError, TypeError):
         return str(value)
+
+# ------------------------------------------------------------------------------
+# REGEX FALLBACK FOR EXPERIENCE COUNTING
+# ------------------------------------------------------------------------------
+def extract_experience_via_regex(text: str) -> float:
+    patterns = [
+        r'(\d+(?:\.\d+)?)\+?\s*years?\s*(?:of)?\s*experience',
+        r'experience\s*(?:of)?\s*(\d+(?:\.\d+)?)\+?\s*years?',
+        r'(\d+(?:\.\d+)?)\+?\s*yrs?'
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            try:
+                return float(match.group(1))
+            except ValueError:
+                continue
+    return 0.0
 
 # ------------------------------------------------------------------------------
 # PARSER LAYER (In-Memory Processing)
@@ -159,7 +177,6 @@ def extract_comprehensive_profile_details(cv_text: str, groq_api_key: str) -> di
         "You are an expert global HR data extraction and timeline calculation engine. "
         "Analyze the provided resume text thoroughly. "
         "Calculate exact full-time professional experience, internships, experience gaps, education gaps, and the education-to-job transition gap based on actual dates found in the text. "
-        "CRITICAL INSTRUCTION FOR EDUCATION-TO-JOB GAP: Look at the graduation/passing month and year of the degree and the start date of the very first job. Calculate the exact difference in months (e.g., '11 months' or '6 months'). DO NOT use imprecise fractional decimal years like 1.42 Yrs; always express gaps under 2 years in clear month counts if they are measured in months. "
         "Always output strictly valid JSON without markdown wrappers."
     )
     
@@ -211,6 +228,11 @@ Return ONLY valid JSON matching this exact structure:
         if not edu_to_job or str(edu_to_job).strip() in ["", "None"]:
             edu_to_job = "N/A"
 
+        # Robust Fallback if total exp is zero
+        if total == 0.0:
+            total = extract_experience_via_regex(cv_text)
+            fulltime = total
+
         return {
             "internship_experience_years": internship,
             "fulltime_experience_years": fulltime,
@@ -220,10 +242,11 @@ Return ONLY valid JSON matching this exact structure:
             "education_to_job_gap": edu_to_job
         }
     except Exception:
+        fallback_total = extract_experience_via_regex(cv_text)
         return {
             "internship_experience_years": 0.0,
-            "fulltime_experience_years": 0.0,
-            "total_experience_years": 0.0,
+            "fulltime_experience_years": fallback_total,
+            "total_experience_years": fallback_total,
             "experience_gaps": ["No major experience gaps found"],
             "education_gaps": ["No education gaps found"],
             "education_to_job_gap": "N/A"
