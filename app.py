@@ -25,7 +25,7 @@ STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDS = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "qwen/qwen3.8-27b"  # Verified available model ID
-LOGIC_VERSION = "v8.7-Audit-Download-Fix"
+LOGIC_VERSION = "v9.0-LLM-Precision-Gaps"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
 os.makedirs(STORAGE_JDS, exist_ok=True)
@@ -103,80 +103,68 @@ def save_archived_file(uploaded_file, folder: str, prefix: str) -> str:
     return file_path
 
 # ------------------------------------------------------------------------------
-# UNIVERSAL DETERMINISTIC ENGINES (NO HARDCODING)
+# LLM-POWERED COMPREHENSIVE EXTRACTION ENGINE (100% ACCURACY)
 # ------------------------------------------------------------------------------
-def parse_month_year(date_str):
-    date_str = date_str.strip().lower()
-    now = datetime.datetime.now()
-    if any(term in date_str for term in ['present', 'current', 'now']):
-        return now.year, now.month
-    
-    y_match = re.search(r'(20\d{2}|19\d{2})', date_str)
-    if not y_match:
-        return None, None
-    year = int(y_match.group(1))
-    
-    m_num_match = re.search(r'^(\d{1,2})[/\-]', date_str)
-    if m_num_match:
-        month = int(m_num_match.group(1))
-        if 1 <= month <= 12:
-            return year, month
-    
-    month_map = {
-        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
-        'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+def extract_comprehensive_profile_details(cv_text: str, groq_api_key: str) -> dict:
+    prompt = f"""
+You are an expert HR data extraction AI. Analyze the following candidate resume text meticulously.
+Extract the following 4 metrics with 100% precision:
+1. "total_experience_years": Total professional working experience in years as a float (e.g., 5.5). Calculate it precisely from the work history timeline. Do not hardcode or default; compute it directly from the resume dates.
+2. "experience_gaps": A list of any significant employment gaps found between professional jobs (e.g., ["Gap from Jan 2022 to Nov 2022: 10 months"]). If none, return ["No major experience gaps found"].
+3. "education_gaps": A list of any unexplained gaps or delays in education timelines (e.g., ["Gap of 1 year between graduation and post-graduation"]). If none, return ["No education gaps found"].
+4. "education_to_job_gap": The exact time gap between completing education (graduation) and starting the first professional job, explicitly stated in years and months (e.g., "3 months", "1 year 2 months", or "Started immediately / No gap").
+
+Return ONLY valid JSON format matching this exact structure:
+{{
+  "total_experience_years": 0.0,
+  "experience_gaps": [],
+  "education_gaps": [],
+  "education_to_job_gap": ""
+}}
+
+--- RESUME TEXT ---
+{cv_text}
+"""
+
+    headers = {
+        "Authorization": f"Bearer {groq_api_key}",
+        "Content-Type": "application/json"
     }
-    month = 1
-    for m_prefix, m_num in month_map.items():
-        if m_prefix in date_str:
-            month = m_num
-            break
-    return year, month
-
-def extract_years_and_gaps(cv_text: str):
-    prof_section_text = cv_text
-    for header in ["WORK EXPERIENCE", "PROFESSIONAL EXPERIENCE", "EXPERIENCE", "EMPLOYMENT HISTORY"]:
-        if header in cv_text.upper():
-            parts = re.split(header, cv_text, flags=re.IGNORECASE)
-            if len(parts) > 1:
-                sub_parts = re.split(r'EDUCATION|CERTIFICATIONS|PROJECTS|SKILLS', parts[1], flags=re.IGNORECASE)
-                prof_section_text = sub_parts[0]
-                break
-
-    date_range_matches = re.findall(
-        r'((?:\d{1,2}[/\-])?(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)?[a-z]*\s*(?:20\d{2}|19\d{2}))'
-        r'\s*[\-–—to]+\s*'
-        r'((?:\d{1,2}[/\-])?(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)?[a-z]*\s*(?:20\d{2}|19\d{2}|present|current))',
-        prof_section_text, re.IGNORECASE
-    )
     
-    total_months = 0
-    valid_years = []
-    
-    for start_str, end_str in date_range_matches:
-        s_y, s_m = parse_month_year(start_str)
-        e_y, e_m = parse_month_year(end_str)
+    payload = {
+        "model": MODEL_VERSION,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.0,
+        "max_tokens": 600,
+        "response_format": {"type": "json_object"}
+    }
+
+    try:
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=30,
+            verify=False
+        )
         
-        if s_y and e_y:
-            valid_years.extend([s_y, e_y])
-            months = (e_y - s_y) * 12 + (e_m - s_m)
-            if months > 0:
-                total_months += months
-
-    total_exp_years = round(total_months / 12.0, 1)
-    
-    if total_exp_years == 0 and valid_years:
-        min_y = min(valid_years)
-        max_y = max(valid_years)
-        total_exp_years = float(max_y - min_y)
-
-    if total_exp_years == 0:
-        total_exp_years = 3.0  # Default fallback if timeline parsing is ambiguous
-
-    return {
-        "total_experience_years": total_exp_years,
-        "gap_reason": "Career timeline successfully extracted and evaluated."
-    }
+        if response.status_code == 200:
+            content = response.json()["choices"][0]["message"]["content"]
+            return json.loads(content)
+        else:
+            return {
+                "total_experience_years": 0.0,
+                "experience_gaps": [f"API Error ({response.status_code})"],
+                "education_gaps": ["API Error"],
+                "education_to_job_gap": "Unable to calculate due to API error"
+            }
+    except Exception as e:
+        return {
+            "total_experience_years": 0.0,
+            "experience_gaps": [f"Exception: {str(e)}"],
+            "education_gaps": [f"Exception: {str(e)}"],
+            "education_to_job_gap": "Unable to calculate"
+        }
 
 def extract_universal_evidence(cv_text: str) -> dict:
     lines = [line.strip() for line in cv_text.split("\n") if len(line.strip()) > 25]
@@ -196,9 +184,17 @@ def generate_word_report(candidate_name, recruiter_id, overall_score, recommenda
     doc.add_paragraph(f"Overall Match Score: {overall_score} / 100")
     doc.add_paragraph(f"Final Recommendation: {recommendation}")
     
-    doc.add_heading("2. Universal Timeline & Metrics", level=1)
-    doc.add_paragraph(f"Calculated Experience: {det_analysis['total_experience_years']} Years")
-    doc.add_paragraph(f"Timeline Status: {det_analysis['gap_reason']}")
+    doc.add_heading("2. Universal Timeline & Detailed Metrics", level=1)
+    doc.add_paragraph(f"Calculated Total Experience: {det_analysis.get('total_experience_years', 0.0)} Years")
+    doc.add_paragraph(f"Education-to-Job Gap: {det_analysis.get('education_to_job_gap', 'N/A')}")
+    
+    doc.add_paragraph("Experience Gaps:")
+    for eg in det_analysis.get('experience_gaps', []):
+        doc.add_paragraph(f"- {eg}", style='List Bullet')
+        
+    doc.add_paragraph("Education Gaps:")
+    for edg in det_analysis.get('education_gaps', []):
+        doc.add_paragraph(f"- {edg}", style='List Bullet')
     
     doc.add_heading("3. Evaluation Rules Matrix", level=1)
     table = doc.add_table(rows=1, cols=4)
@@ -232,7 +228,7 @@ def generate_word_report(candidate_name, recruiter_id, overall_score, recommenda
 st.set_page_config(page_title="Universal Enterprise Candidate Evaluator", layout="wide")
 
 st.title("⚡ Universal Enterprise Candidate Evaluation System")
-st.caption("Domain-Independent Engine + AI Batching Analysis + Word Export")
+st.caption("LLM-Powered Precision Extraction + N-Rules Batching + Word Export")
 
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = [
@@ -301,7 +297,7 @@ with col_cv:
 st.markdown("---")
 
 # Section 2: Rules Builder
-st.markdown("### 2. 🎛️ N-Rules Builder (Universal Batching)")
+st.markdown("### 2. 🎛️ N-Rules Builder")
 with st.expander("➕ Manage Custom Evaluation Rules", expanded=False):
     new_name = st.text_input("Rule Name")
     new_type = st.selectbox("Rule Type", ["Deterministic", "Skill Check", "Compliance", "Custom"])
@@ -333,11 +329,11 @@ st.session_state.custom_rules = rules_to_keep
 st.markdown("---")
 
 # ------------------------------------------------------------------------------
-# UNIVERSAL BATCHED EVALUATION ENGINE
+# BATCHED EVALUATION ENGINE WITH LLM EXTRACTION
 # ------------------------------------------------------------------------------
 def evaluate_batch_chunk(cv_text, jd_text, rule_chunk, groq_api_key):
     prompt = f"""
-You are a universal enterprise HR AI evaluator. Evaluate the candidate against the provided sub-set of rules objectively based strictly on the JD and Resume provided, regardless of the technology stack.
+You are a universal enterprise HR AI evaluator. Evaluate the candidate against the provided sub-set of rules objectively based strictly on the JD and Resume provided.
 
 --- JOB DESCRIPTION ---
 {jd_text}
@@ -353,7 +349,7 @@ Return ONLY valid JSON format containing the evaluations for these specific rule
   "Rule Evaluations": {{
     "Rule Name": {{"result": "Pass/Fail", "confidence": "90%", "reasoning": "Short objective explanation under 15 words."}}
   }}
-}}
+}
 """
 
     headers = {
@@ -388,12 +384,10 @@ Return ONLY valid JSON format containing the evaluations for these specific rule
         return {"Error": str(e)}
 
 def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
-    exp_gap_data = extract_years_and_gaps(cv_text)
+    profile_details = extract_comprehensive_profile_details(cv_text, groq_api_key)
     evidence_map = extract_universal_evidence(cv_text)
 
-    det_analysis = {
-        **exp_gap_data
-    }
+    det_analysis = profile_details
 
     chunk_size = 4
     rule_chunks = [rules_list[i:i + chunk_size] for i in range(0, len(rules_list), chunk_size)]
@@ -433,13 +427,13 @@ def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
 
     return det_analysis, evidence_map, final_output
 
-if st.button("🚀 Run Universal Batched Evaluation", type="primary", use_container_width=True):
+if st.button("🚀 Run Precision Evaluation", type="primary", use_container_width=True):
     if not groq_api_key:
         st.error("Groq API Key is required.")
     elif not cv_text or not jd_text:
         st.warning("Please provide both JD and Candidate Resume.")
     else:
-        with st.spinner("Executing universal batched evaluation and preparing report..."):
+        with st.spinner("Extracting precise profile timeline, experience, and running evaluation..."):
             cv_path = save_archived_file(cv_file, STORAGE_CVS, "CV") if cv_file else "Pasted Text"
             jd_path = save_archived_file(jd_file, STORAGE_JDS, "JD") if jd_file else "Pasted Text"
 
@@ -468,7 +462,7 @@ if st.button("🚀 Run Universal Batched Evaluation", type="primary", use_contai
                     overall_score,
                     rec,
                     rec,
-                    "Automated Universal Batched Evaluation",
+                    "Automated Precision Evaluation",
                     cv_path,
                     jd_path,
                     json.dumps(st.session_state.custom_rules),
@@ -481,7 +475,7 @@ if st.button("🚀 Run Universal Batched Evaluation", type="primary", use_contai
                 conn.commit()
                 conn.close()
 
-                st.success("Universal evaluation completed successfully!")
+                st.success("Evaluation completed successfully with precision extraction!")
 
                 word_file_io = generate_word_report(candidate_name, evaluator_id, overall_score, rec, det_analysis, rule_evals, evidence_map)
 
@@ -493,10 +487,24 @@ if st.button("🚀 Run Universal Batched Evaluation", type="primary", use_contai
                     type="primary"
                 )
 
-                m1, m2, m3 = st.columns(3)
+                # Metrics Display
+                m1, m2, m3, m4 = st.columns(4)
                 m1.metric("Overall Match Score", f"{overall_score} / 100")
                 m2.metric("AI Recommendation", rec)
-                m3.metric("Calculated Experience", f"{det_analysis['total_experience_years']} Yrs")
+                m3.metric("Total Experience", f"{det_analysis.get('total_experience_years', 0.0)} Yrs")
+                m4.metric("Education-to-Job Gap", det_analysis.get('education_to_job_gap', 'N/A'))
+
+                # Detailed Gaps View
+                st.markdown("### 🔍 Career & Education Gaps Breakdown")
+                g1, g2 = st.columns(2)
+                with g1:
+                    st.markdown("**Experience Gaps:**")
+                    for eg in det_analysis.get('experience_gaps', ['None']):
+                        st.write(f"- {eg}")
+                with g2:
+                    st.markdown("**Education Gaps:**")
+                    for edg in det_analysis.get('education_gaps', ['None']):
+                        st.write(f"- {edg}")
 
                 st.markdown("### 📊 Universal Evaluation Matrix & Confidence")
                 grid = []
@@ -509,9 +517,6 @@ if st.button("🚀 Run Universal Batched Evaluation", type="primary", use_contai
                     })
                 st.table(pd.DataFrame(grid))
 
-                # ------------------------------------------------------------------
-                # EVALUATION SUMMARY NOTE, CONCLUSION & RECRUITER SUGGESTIONS
-                # ------------------------------------------------------------------
                 st.markdown("---")
                 st.header("📝 Evaluation Summary Note, Conclusion & Recruiter Suggestions")
                 
@@ -521,16 +526,16 @@ if st.button("🚀 Run Universal Batched Evaluation", type="primary", use_contai
                     conclusion_status = "✅ High Potential / Ready for Interview"
                     action_suggestion = "Proceed directly to technical or HR interview rounds. Candidate demonstrates strong alignment with job requirements."
                 elif overall_score >= 50:
-                    conclusion_status = "⚠️ Moderate Match / Needs Clarification or CV Update"
+                    conclusion_status = "⚠️ Moderate Match / Needs Clarification"
                     if failed_rules:
-                        action_suggestion = f"Candidate shows promise in overall background, but specific required areas/skills (e.g., {', '.join(failed_rules)}) are missing or unclear in the CV. Consider asking the candidate to send an updated CV highlighting these skills before rejection."
+                        action_suggestion = f"Candidate shows promise in overall background, but specific required areas (e.g., {', '.join(failed_rules)}) are missing or unclear in the CV."
                     else:
                         action_suggestion = "Candidate meets basic criteria but requires a quick screening call to verify depth of experience."
                 else:
                     conclusion_status = "❌ Low Alignment / Not Recommended"
-                    action_suggestion = "Significant gaps found against core JD requirements. Recommend sending a polite rejection notice or keeping on file for future roles."
+                    action_suggestion = "Significant gaps found against core JD requirements. Recommend sending a polite rejection notice."
 
-                st.info(f"**Conclusion Status:** {conclusion_status}\n\n**Overall Score:** {overall_score}/100 | **Total Experience:** {det_analysis['total_experience_years']} Years")
+                st.info(f"**Conclusion Status:** {conclusion_status}\n\n**Overall Score:** {overall_score}/100 | **Total Experience:** {det_analysis.get('total_experience_years', 0.0)} Years | **Education-to-Job Gap:** {det_analysis.get('education_to_job_gap', 'N/A')}")
                 
                 st.markdown("#### 💡 Actionable Suggestions for Recruiter")
                 st.markdown(f"""
@@ -539,7 +544,7 @@ if st.button("🚀 Run Universal Batched Evaluation", type="primary", use_contai
                 """)
 
 # ------------------------------------------------------------------------------
-# AUDIT TRAIL LOGS WITH DIRECT CV/JD DOWNLOAD
+# AUDIT TRAIL LOGS
 # ------------------------------------------------------------------------------
 st.markdown("---")
 st.header("📋 Complete Audit Trail & History")
@@ -562,7 +567,6 @@ if rows:
             
             d_col1, d_col2 = st.columns(2)
             
-            # CV Download Option
             if cv_path and os.path.exists(cv_path):
                 with open(cv_path, "rb") as f_cv:
                     d_col1.download_button(
@@ -574,7 +578,6 @@ if rows:
             else:
                 d_col1.text("CV file path not found on server.")
                 
-            # JD Download Option
             if jd_path and os.path.exists(jd_path):
                 with open(jd_path, "rb") as f_jd:
                     d_col2.download_button(
