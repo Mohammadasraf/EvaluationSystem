@@ -26,7 +26,7 @@ STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDs = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.17-Guardrail-Deterministic-Enforced"
+LOGIC_VERSION = "v10.18-Guardrail-Summary-Restored"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
 os.makedirs(STORAGE_JDs, exist_ok=True)
@@ -498,6 +498,7 @@ if st.button("🚀 Run Precision Evaluation", type="primary", use_container_widt
             rule_evals = ai_results.get("Rule Evaluations", {})
             overall_score = ai_results.get("Overall Candidate Match Score", 0.0)
             rec = ai_results.get("Derived Recommendation", "Consider")
+            summary_text = ai_results.get("AI Contextual Summary", "")
 
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
@@ -534,7 +535,8 @@ if st.button("🚀 Run Precision Evaluation", type="primary", use_container_widt
                 "recommendation": rec,
                 "det_analysis": det_analysis,
                 "rule_evals": rule_evals,
-                "evidence_map": evidence_map
+                "evidence_map": evidence_map,
+                "summary": summary_text
             }
             st.success("Evaluation completed with deterministic guardrails applied!")
 
@@ -549,6 +551,7 @@ if st.session_state.evaluation_results is not None:
     det_analysis = res["det_analysis"]
     rule_evals = res["rule_evals"]
     evidence_map = res["evidence_map"]
+    summary_text = res.get("summary", "")
 
     st.markdown("---")
     word_file_io = generate_word_report(candidate_name, evaluator_id, overall_score, rec, det_analysis, rule_evals, evidence_map)
@@ -567,6 +570,10 @@ if st.session_state.evaluation_results is not None:
         st.warning(f"📌 **AI Recommendation:** {rec}")
     else:
         st.error(f"📌 **AI Recommendation:** {rec}")
+
+    # Display Evaluation / Contextual Summary Box Restored
+    if summary_text:
+        st.info(f"📝 **Evaluation & Guardrail Summary:** {summary_text}")
 
     ft_exp = round(float(det_analysis.get('fulltime_experience_years', 0.0)), 1)
     in_exp = round(float(det_analysis.get('internship_experience_years', 0.0)), 1)
