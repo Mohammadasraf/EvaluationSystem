@@ -26,7 +26,7 @@ STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDs = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.19-GapBreakdown-Recommendation-Added"
+LOGIC_VERSION = "v10.20-CleanGapBreakdown-UI"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
 os.makedirs(STORAGE_JDs, exist_ok=True)
@@ -299,7 +299,7 @@ with st.sidebar:
         
     st.info(f"Model: {MODEL_VERSION}\nLogic: {LOGIC_VERSION}")
 
-# Section 1: Inputs (Safe Global Initialization)
+# Section 1: Inputs
 st.markdown("### 1. Inputs (Job Description & Candidate Resume)")
 
 jd_file = None
@@ -612,27 +612,30 @@ if st.session_state.evaluation_results is not None:
     m3.metric("Intern Exp", f"{in_exp} Yrs")
     m4.metric("Total Experience", f"{tot_exp} Yrs")
 
-    # --- Career & Education Gap Breakdown Section Added ---
+    # --- Career & Education Gap Breakdown Section (Cleaned & Fixed) ---
     st.markdown("### 🔍 Career & Education Gap Breakdown")
     col_g1, col_g2 = st.columns(2)
+    
     with col_g1:
-        st.markdown("**💼 Experience Gaps:**")
+        st.markdown("#### 💼 Experience Gaps")
         exp_gaps_list = det_analysis.get("experience_gaps", ["No major experience gaps found"])
-        if isinstance(exp_gaps_list, list):
+        if isinstance(exp_gaps_list, list) and len(exp_gaps_list) > 0:
             for gap in exp_gaps_list:
                 st.markdown(f"- {gap}")
         else:
-            st.markdown(f"- {exp_gaps_list}")
+            st.markdown("- No major experience gaps found")
             
     with col_g2:
-        st.markdown("**🎓 Education Gaps & Timeline:**")
+        st.markdown("#### 🎓 Education & Transition Gaps")
         edu_gaps_list = det_analysis.get("education_gaps", ["No education gaps found"])
-        if isinstance(edu_gaps_list, list):
+        edu_to_job = det_analysis.get("education_to_job_gap", "N/A")
+        
+        if isinstance(edu_gaps_list, list) and len(edu_gaps_list) > 0:
             for gap in edu_gaps_list:
-                st.markdown(f"- {gap}")
-        else:
-            st.markdown(f"- {edu_gaps_list}")
-        st.markdown(f"**Education-to-Job Gap:** {edu_gap_val}")
+                if str(gap).strip().lower() != str(edu_to_job).strip().lower():
+                    st.markdown(f"- {gap}")
+        
+        st.metric(label="Education-to-Job Transition Gap", value=str(edu_to_job))
 
     st.markdown("### 📊 Universal Evaluation Matrix & Confidence")
     grid = []
