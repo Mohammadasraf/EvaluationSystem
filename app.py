@@ -26,7 +26,7 @@ STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDs = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.16-Guardrail-Deterministic-Enforced"
+LOGIC_VERSION = "v10.17-Guardrail-Deterministic-Enforced"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
 os.makedirs(STORAGE_JDs, exist_ok=True)
@@ -107,7 +107,6 @@ def save_archived_file(uploaded_file, folder: str, prefix: str) -> str:
 # DETERMINISTIC JD & CV PARSING HELPERS
 # ------------------------------------------------------------------------------
 def extract_jd_requirements(jd_text: str, groq_api_key: str) -> dict:
-    """Extracts structured requirements (like min experience years) from JD deterministically via LLM."""
     system_prompt = "Extract key quantitative criteria from the Job Description into strict JSON. Return ONLY JSON."
     user_prompt = f"""
 Analyze this Job Description and extract:
@@ -137,7 +136,6 @@ Return JSON:
         parsed = json.loads(repair_json(content))
         return {"minimum_experience_years": float(parsed.get("minimum_experience_years", 0.0) or 0.0)}
     except Exception:
-        # Fallback regex search for years
         match = re.search(r'(\d+)\+?\s*years?', jd_text, re.IGNORECASE)
         val = float(match.group(1)) if match else 0.0
         return {"minimum_experience_years": val}
@@ -301,15 +299,20 @@ with st.sidebar:
         
     st.info(f"Model: {MODEL_VERSION}\nLogic: {LOGIC_VERSION}")
 
-# Section 1: Inputs
+# Section 1: Inputs (Safe Global Initialization)
 st.markdown("### 1. Inputs (Job Description & Candidate Resume)")
+
+jd_file = None
+cv_file = None
+jd_text = ""
+cv_text = ""
+candidate_name = "Candidate Name"
+
 col_jd, col_cv = st.columns(2)
 
 with col_jd:
     st.subheader("📄 Job Description (JD)")
     jd_input_type = st.radio("JD Input Method", ["File Upload", "Paste Text"], key="jd_type")
-    jd_text = ""
-    jd_file = None
     if jd_input_type == "File Upload":
         jd_file = st.file_uploader("Upload JD", type=["pdf", "docx", "txt"], key="jd_file")
         if jd_file:
@@ -321,8 +324,6 @@ with col_cv:
     st.subheader("👤 Candidate Resume (CV)")
     candidate_name = st.text_input("Candidate Full Name", value="Candidate Name")
     cv_input_type = st.radio("CV Input Method", ["File Upload", "Paste Text"], key="cv_type")
-    cv_text = ""
-    cv_file = None
     if cv_input_type == "File Upload":
         cv_file = st.file_uploader("Upload Resume", type=["pdf", "docx", "txt", "png", "jpg"], key="cv_file")
         if cv_file:
@@ -416,7 +417,6 @@ Return ONLY valid JSON:
         return {"Rule Evaluations": fallback_evals}
 
 def apply_deterministic_guardrails(jd_analysis, det_analysis, combined_rule_evals, overall_score, recommendation):
-    """Deterministic hard gatekeeper check to enforce experience requirements."""
     min_req_exp = float(jd_analysis.get('minimum_experience_years', 0.0))
     candidate_tot_exp = float(det_analysis.get('total_experience_years', 0.0))
     
@@ -424,7 +424,6 @@ def apply_deterministic_guardrails(jd_analysis, det_analysis, combined_rule_eval
         recommendation = "Reject"
         overall_score = min(overall_score, 40.0)
         
-        # Override Work Experience rule to Fail
         for r_name in combined_rule_evals:
             if "experience" in r_name.lower() or "work" in r_name.lower():
                 combined_rule_evals[r_name] = {
@@ -471,7 +470,6 @@ def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
     else:
         recommendation = "Reject"
 
-    # APPLY DETERMINISTIC GUARDRAILS HERE
     combined_rule_evals, overall_score, recommendation, summary = apply_deterministic_guardrails(
         jd_analysis, det_analysis, combined_rule_evals, overall_score, recommendation
     )
@@ -493,7 +491,7 @@ if st.button("🚀 Run Precision Evaluation", type="primary", use_container_widt
     else:
         with st.spinner("Extracting profile timeline, running deterministic checks, and evaluating rules..."):
             cv_path = save_archived_file(cv_file, STORAGE_CVS, "CV") if cv_file else "Pasted Text"
-            jd_path = save_archived_file(jd_file, STORAGE_JDS, "JD") if jd_file else "Pasted Text"
+            jd_path = save_archived_file(jd_file, STORAGE_JDs, "JD") if jd_file else "Pasted Text"
 
             det_analysis, evidence_map, ai_results = evaluate_hybrid_system_batched(cv_text, jd_text, st.session_state.custom_rules, groq_api_key)
 
