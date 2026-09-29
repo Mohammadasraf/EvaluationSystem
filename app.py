@@ -24,7 +24,7 @@ except ImportError:
 STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDS = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
-MODEL_VERSION = "llama-3.3-70b-versatile"  # Updated high-performance model ID
+MODEL_VERSION = "llama-3.1-8b-instant"  # Updated high-performance model ID
 LOGIC_VERSION = "v10.0-Precision-Experience-UI"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
