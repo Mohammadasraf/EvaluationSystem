@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.26-In-Memory-RobustPaste"
+LOGIC_VERSION = "v10.29-In-Memory-UniversalAccurate"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
@@ -151,22 +151,24 @@ def extract_comprehensive_profile_details(cv_text: str, groq_api_key: str) -> di
     current_date_str = datetime.datetime.now().strftime("%B %Y")
     
     system_prompt = (
-        "You are an expert global HR data extraction engine. "
-        "Calculate exact full-time professional experience, internships, and timeline data accurately from dates. "
+        "You are an expert global HR data extraction and timeline calculation engine. "
+        "Analyze the provided resume text thoroughly whether it is uploaded or pasted. "
+        "Calculate exact full-time professional experience, internships, experience gaps, education gaps, and the education-to-job transition gap based on actual dates found in the text. "
+        "Do not use hardcoded or assumed values. If no gap or experience exists, return 0.0 or standard clean text ('No major experience gaps found'). "
         "Always output strictly valid JSON without markdown wrappers."
     )
     
     user_prompt = f"""
-Today's current date is {current_date_str}. Analyze the candidate resume text globally and calculate years of experience.
+Today's current date is {current_date_str}. Analyze the candidate resume text globally.
 
 Return ONLY valid JSON matching this exact structure:
 {{
   "internship_experience_years": 0.0,
   "fulltime_experience_years": 0.0,
   "total_experience_years": 0.0,
-  "experience_gaps": [],
-  "education_gaps": [],
-  "education_to_job_gap": ""
+  "experience_gaps": ["No major experience gaps found"],
+  "education_gaps": ["No education gaps found"],
+  "education_to_job_gap": "N/A"
 }}
 
 --- RESUME TEXT ---
@@ -191,28 +193,32 @@ Return ONLY valid JSON matching this exact structure:
         fulltime = float(parsed.get("fulltime_experience_years", 0.0) or 0.0)
         internship = float(parsed.get("internship_experience_years", 0.0) or 0.0)
         total = float(parsed.get("total_experience_years", 0.0) or (fulltime + internship))
-        
-        if total == 0.0 and fulltime == 0.0:
-            match = re.search(r'(\d+)\+?\s*years?\s*of\s*experience', cv_text, re.IGNORECASE)
-            if match:
-                fulltime = float(match.group(1))
-                total = fulltime
+
+        exp_gaps = parsed.get("experience_gaps", [])
+        if not exp_gaps:
+            exp_gaps = ["No major experience gaps found"]
+
+        edu_gaps = parsed.get("education_gaps", [])
+        if not edu_gaps:
+            edu_gaps = ["No education gaps found"]
+
+        edu_to_job = parsed.get("education_to_job_gap", "N/A")
+        if not edu_to_job or str(edu_to_job).strip() in ["", "None"]:
+            edu_to_job = "N/A"
 
         return {
             "internship_experience_years": internship,
             "fulltime_experience_years": fulltime,
             "total_experience_years": total if total > 0 else (fulltime + internship),
-            "experience_gaps": parsed.get("experience_gaps", ["No major experience gaps found"]),
-            "education_gaps": parsed.get("education_gaps", ["No education gaps found"]),
-            "education_to_job_gap": parsed.get("education_to_job_gap", "N/A")
+            "experience_gaps": exp_gaps,
+            "education_gaps": edu_gaps,
+            "education_to_job_gap": edu_to_job
         }
     except Exception:
-        match = re.search(r'(\d+)\+?\s*years?\s*of\s*experience', cv_text, re.IGNORECASE)
-        fallback_exp = float(match.group(1)) if match else 4.0
         return {
-            "internship_experience_years": 0.5,
-            "fulltime_experience_years": fallback_exp,
-            "total_experience_years": fallback_exp + 0.5,
+            "internship_experience_years": 0.0,
+            "fulltime_experience_years": 0.0,
+            "total_experience_years": 0.0,
             "experience_gaps": ["No major experience gaps found"],
             "education_gaps": ["No education gaps found"],
             "education_to_job_gap": "N/A"
