@@ -26,7 +26,7 @@ STORAGE_CVS = os.path.join("storage", "CVs")
 STORAGE_JDS = os.path.join("storage", "JDs")
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.12-Global-CV-Production-Clean"
+LOGIC_VERSION = "v10.15-Practical-PartialMatch-Enhanced"
 
 os.makedirs(STORAGE_CVS, exist_ok=True)
 os.makedirs(STORAGE_JDS, exist_ok=True)
@@ -111,8 +111,8 @@ def extract_comprehensive_profile_details(cv_text: str, groq_api_key: str) -> di
     
     system_prompt = (
         "You are an expert global HR data extraction and professional tenure calculation engine. "
-        "You can parse resumes from any country, format, or layout worldwide (e.g., US, Europe, Asia, chronological, functional). "
-        "Your task is to meticulously identify all employment start and end dates regardless of how they are formatted, "
+        "You can parse resumes from any country, format, or layout worldwide. "
+        "Your task is to meticulously identify all employment start and end dates, "
         "calculate exact full-time professional experience, internships, gaps, and education timelines. "
         "Always output strictly valid JSON matching the requested format without markdown wrappers."
     )
@@ -121,11 +121,11 @@ def extract_comprehensive_profile_details(cv_text: str, groq_api_key: str) -> di
 Today's current date is {current_date_str}. Analyze the candidate resume text globally and universally.
 
 Instructions for global calculation:
-1. "internship_experience_years": Sum up all types of internships, traineeships, or industrial placements worldwide in years as a float. If none, 0.0.
-2. "fulltime_experience_years": Compute total professional full-time working experience in years as a float. Handle formats like 'MM/YYYY - MM/YYYY', 'Month Year - Present', 'YYYY - YYYY', etc. Do not include internships here.
+1. "internship_experience_years": Sum up all types of internships in years as a float. If none, 0.0.
+2. "fulltime_experience_years": Compute total professional full-time working experience in years as a float.
 3. "total_experience_years": The precise sum of full-time experience and internship experience as a float.
-4. "experience_gaps": Identify significant unexplained employment gaps between jobs globally. If none, return ["No major experience gaps found"].
-5. "education_gaps": Identify any major unexplained gaps in schooling or university timelines. If none, return ["No education gaps found"].
+4. "experience_gaps": Identify significant unexplained employment gaps. If none, return ["No major experience gaps found"].
+5. "education_gaps": Identify major unexplained gaps in education. If none, return ["No education gaps found"].
 6. "education_to_job_gap": Calculate the time gap between finishing education and starting the first professional career role.
 
 Return ONLY valid JSON matching this exact structure:
@@ -155,7 +155,7 @@ Return ONLY valid JSON matching this exact structure:
         )
         
         if not completion or not completion.choices or not completion.choices[0].message.content:
-            raise ValueError("Empty completion string received from global extraction LLM")
+            raise ValueError("Empty completion string received")
             
         content = completion.choices[0].message.content.strip()
         if "```json" in content:
@@ -179,7 +179,6 @@ Return ONLY valid JSON matching this exact structure:
             "education_to_job_gap": parsed.get("education_to_job_gap", "N/A")
         }
     except Exception as e:
-        # Clean fallback without showing technical error strings on UI
         return {
             "internship_experience_years": 0.0,
             "fulltime_experience_years": 0.0,
@@ -213,14 +212,6 @@ def generate_word_report(candidate_name, recruiter_id, overall_score, recommenda
     doc.add_paragraph(f"Calculated Total Experience: {det_analysis.get('total_experience_years', 0.0)} Years")
     doc.add_paragraph(f"Education-to-Job Gap: {det_analysis.get('education_to_job_gap', 'N/A')}")
     
-    doc.add_paragraph("Experience Gaps:")
-    for eg in det_analysis.get('experience_gaps', []):
-        doc.add_paragraph(f"- {eg}", style='List Bullet')
-        
-    doc.add_paragraph("Education Gaps:")
-    for edg in det_analysis.get('education_gaps', []):
-        doc.add_paragraph(f"- {edg}", style='List Bullet')
-    
     doc.add_heading("3. Evaluation Rules Matrix", level=1)
     table = doc.add_table(rows=1, cols=4)
     hdr_cells = table.rows[0].cells
@@ -253,11 +244,11 @@ def generate_word_report(candidate_name, recruiter_id, overall_score, recommenda
 st.set_page_config(page_title="Universal Enterprise Candidate Evaluator", layout="wide")
 
 st.title("⚡ Universal Enterprise Candidate Evaluation System")
-st.caption("LLM-Powered Precision Extraction + N-Rules Batching + Word Export")
+st.caption("LLM-Powered Precision Extraction + Smart Partial-Match Rules + Word Export")
 
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = [
-        {"id": 1, "name": "Technical & Domain Competency", "type": "AI Evaluation", "criteria": "Candidate possesses required technical stack/skills mentioned in JD."},
+        {"id": 1, "name": "Technical & Domain Competency", "type": "AI Evaluation", "criteria": "Candidate possesses required technical stack/skills mentioned in JD. (Note: Allow partial match if core technology stack is strong and only secondary tools/monitoring apps are missing)."},
         {"id": 2, "name": "Work Experience", "type": "Deterministic", "criteria": "Meets or exceeds minimum required professional experience."},
         {"id": 3, "name": "Project Relevance", "type": "AI Evaluation", "criteria": "Previous project exposure aligns with job responsibilities."},
         {"id": 4, "name": "Career Stability", "type": "Deterministic", "criteria": "No unexplained erratic career switches or major gaps."},
@@ -357,13 +348,18 @@ st.session_state.custom_rules = rules_to_keep
 st.markdown("---")
 
 # ------------------------------------------------------------------------------
-# BATCHED EVALUATION ENGINE WITH FAILSAFE REPAIR
+# BATCHED EVALUATION ENGINE WITH SMART PARTIAL MATCH LOGIC
 # ------------------------------------------------------------------------------
 def evaluate_batch_chunk(cv_text, jd_text, rule_chunk, groq_api_key):
-    system_prompt = "You are a universal enterprise HR AI evaluator. Return ONLY valid JSON format matching the requested structure with no markdown code blocks."
+    system_prompt = (
+        "You are an expert, pragmatic enterprise HR AI evaluator. "
+        "Evaluate rules using three potential result statuses: 'Pass', 'Partial Match', or 'Fail'. "
+        "IMPORTANT GUIDELINE: Do NOT mark a rule as 'Fail' simply because secondary auxiliary tools, third-party libraries, or monitoring applications (e.g., Dynatrace, specific niche plugins) mentioned in the JD are absent in the resume, provided the core technical background, core language, and years of experience align well. In such cases, mark it as 'Partial Match'. "
+        "Return ONLY valid JSON format matching the requested structure with no markdown code blocks."
+    )
     
     user_prompt = f"""
-Evaluate the candidate against the provided sub-set of rules objectively based strictly on the JD and Resume provided.
+Evaluate the candidate against the provided sub-set of rules pragmatically based strictly on the JD and Resume provided.
 
 --- JOB DESCRIPTION ---
 {jd_text}
@@ -377,7 +373,7 @@ Evaluate the candidate against the provided sub-set of rules objectively based s
 Return ONLY valid JSON matching this exact structure:
 {{
   "Rule Evaluations": {{
-    "Rule Name": {{"result": "Pass/Fail", "confidence": "90%", "reasoning": "Short objective explanation under 15 words."}}
+    "Rule Name": {{"result": "Pass / Partial Match / Fail", "confidence": "90%", "reasoning": "Short objective explanation under 15 words."}}
   }}
 }}
 """
@@ -434,7 +430,7 @@ def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
     rule_chunks = [rules_list[i:i + chunk_size] for i in range(0, len(rules_list), chunk_size)]
     
     combined_rule_evals = {}
-    passed_rules_count = 0
+    score_points = 0.0
     total_rules = len(rules_list)
 
     for chunk in rule_chunks:
@@ -442,16 +438,19 @@ def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
         evals = res.get("Rule Evaluations", {})
         for r_name, r_data in evals.items():
             combined_rule_evals[r_name] = r_data
-            if "pass" in str(r_data.get("result", "")).lower():
-                passed_rules_count += 1
+            res_str = str(r_data.get("result", "")).lower()
+            if "pass" in res_str and "partial" not in res_str:
+                score_points += 1.0
+            elif "partial" in res_str:
+                score_points += 0.7  # Partial match gets weighted credit instead of zero!
 
-    overall_score = round((passed_rules_count / max(total_rules, 1)) * 100, 1)
+    overall_score = round((score_points / max(total_rules, 1)) * 100, 1)
     if overall_score >= 80:
         recommendation = "Strong Hire"
         summary = "Candidate successfully met the vast majority of evaluated criteria."
-    elif overall_score >= 50:
-        recommendation = "Consider"
-        summary = "Candidate met several criteria but requires verification on specific areas."
+    elif overall_score >= 40:
+        recommendation = "Consider / Request Updated CV"
+        summary = "Candidate met several criteria or has partial/transferable background requiring resume refinement."
     else:
         recommendation = "Reject"
         summary = "Candidate fell short on critical rule thresholds."
@@ -575,15 +574,20 @@ if st.session_state.evaluation_results is not None:
     st.markdown("---")
     st.header("📝 Evaluation Summary Note, Conclusion & Recruiter Suggestions")
     
-    failed_rules = [r_name for r_name, r_data in rule_evals.items() if "fail" in str(r_data.get("result", "")).lower()]
+    partial_or_failed = [r_name for r_name, r_data in rule_evals.items() if any(k in str(r_data.get("result", "")).lower() for k in ["fail", "partial"])]
     
     if overall_score >= 80:
         conclusion_status = "✅ High Potential / Ready for Interview"
         action_suggestion = "Proceed directly to technical or HR interview rounds. Candidate demonstrates strong alignment with job requirements."
-    elif overall_score >= 50:
-        conclusion_status = "⚠️ Moderate Match / Needs Clarification"
-        if failed_rules:
-            action_suggestion = f"Candidate shows promise in overall background, but specific required areas (e.g., {', '.join(failed_rules)}) are missing or unclear in the CV."
+    elif overall_score >= 40:
+        conclusion_status = "⚠️ Moderate Match / Partial Skill Alignment"
+        if partial_or_failed:
+            action_suggestion = (
+                f"Candidate shows strong transferable experience or core expertise, but specific secondary tools or skills "
+                f"({', '.join(partial_or_failed)}) resulted in partial matches or are unlisted. "
+                f"\n\n💡 **Recruiter Action Advice:** Do not reject. **Ask the candidate to update and resend their CV** "
+                f"highlighting any experience with these secondary tools if applicable."
+            )
         else:
             action_suggestion = "Candidate meets basic criteria but requires a quick screening call to verify depth of experience."
     else:
@@ -595,7 +599,7 @@ if st.session_state.evaluation_results is not None:
     st.markdown("#### 💡 Actionable Suggestions for Recruiter")
     st.markdown(f"""
     1. **Next Step:** {action_suggestion}
-    2. **Missing/Weak Areas to Probe:** {', '.join(failed_rules) if failed_rules else 'None identified. All evaluated criteria passed successfully.'}
+    2. **Areas to Probe / Request Update:** {', '.join(partial_or_failed) if partial_or_failed else 'None identified. All evaluated criteria passed successfully.'}
     """)
 
 # ------------------------------------------------------------------------------
