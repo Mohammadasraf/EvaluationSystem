@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v11.0-Dynamic-Guardrails-Engine"
+LOGIC_VERSION = "v12.0-Dynamic-Rules-Editor"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
@@ -384,7 +384,7 @@ def generate_in_memory_word_report(candidate_name, recruiter_id, overall_score, 
 st.set_page_config(page_title="Universal Enterprise Candidate Evaluator", layout="wide")
 
 st.title("⚡ Universal Enterprise Candidate Evaluation System (In-Memory)")
-st.caption("Dynamic Math Engine + AI Precision + Fully Adaptive Rules & Guardrails")
+st.caption("Dynamic Math Engine + AI Precision + Fully Editable Rules & Guardrails")
 
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = [
@@ -394,6 +394,9 @@ if "custom_rules" not in st.session_state:
         {"id": 4, "name": "Career Stability", "type": "Deterministic", "criteria": "No unexplained erratic career switches or major gaps."},
         {"id": 5, "name": "Overall Profile Fit", "type": "AI Evaluation", "criteria": "Strong overall suitability for the role."}
     ]
+
+if "editing_rule_id" not in st.session_state:
+    st.session_state.editing_rule_id = None
 
 if "evaluation_results" not in st.session_state:
     st.session_state.evaluation_results = None
@@ -458,17 +461,18 @@ with col_cv:
 
 st.markdown("---")
 
-# Section 2: Rules Builder
-st.markdown("### 2. 🎛 N-Rules Builder")
-with st.expander("➕ Manage Custom Evaluation Rules", expanded=False):
-    new_name = st.text_input("Rule Name")
-    new_type = st.selectbox("Rule Type", ["Deterministic", "Skill Check", "Compliance", "Custom"])
-    new_criteria = st.text_area("Rule Description / Criteria")
+# Section 2: Rules Builder & Editor
+st.markdown("### 2. 🎛 N-Rules Builder & Editor")
+with st.expander("➕ Add New Evaluation Rule", expanded=False):
+    new_name = st.text_input("Rule Name", key="new_r_name")
+    new_type = st.selectbox("Rule Type", ["Deterministic", "Skill Check", "Compliance", "Custom"], key="new_r_type")
+    new_criteria = st.text_area("Rule Description / Criteria", key="new_r_crit")
     
     if st.button("Add Rule"):
         if new_name and new_criteria:
+            max_id = max([r['id'] for r in st.session_state.custom_rules]) if st.session_state.custom_rules else 0
             st.session_state.custom_rules.append({
-                "id": len(st.session_state.custom_rules)+1,
+                "id": max_id + 1,
                 "name": new_name,
                 "type": new_type,
                 "criteria": new_criteria
@@ -478,13 +482,44 @@ with st.expander("➕ Manage Custom Evaluation Rules", expanded=False):
         else:
             st.warning("Please fill both Rule Name and Criteria.")
 
+st.markdown("#### Current Evaluation Rules")
 rules_to_keep = []
 for idx, rule in enumerate(st.session_state.custom_rules):
-    c1, c2, c3 = st.columns([1, 4, 1])
+    c1, c2, c3, c4 = st.columns([1, 4, 1, 1])
     c1.markdown(f"**Rule {idx+1}**")
-    c2.markdown(f"**{rule['name']}**: {rule['criteria']}")
-    if c3.button("❌", key=f"del_{rule['id']}"):
+    c2.markdown(f"**{rule['name']}** ({rule.get('type', 'Custom')}):\n*{rule['criteria']}*")
+    
+    if c3.button("✏️", key=f"edit_{rule['id']}"):
+        st.session_state.editing_rule_id = rule['id']
         st.rerun()
+        
+    if c4.button("❌", key=f"del_{rule['id']}"):
+        if st.session_state.editing_rule_id == rule['id']:
+            st.session_state.editing_rule_id = None
+        st.rerun()
+        continue # Skip keeping this rule
+        
+    # Inline editing block if this rule is selected for editing
+    if st.session_state.editing_rule_id == rule['id']:
+        with st.container():
+            st.markdown(f"--- \n **✏️ Editing Rule #{idx+1} ({rule['name']})**")
+            edited_name = st.text_input("Edit Rule Name", value=rule['name'], key=f"ename_{rule['id']}")
+            edited_type = st.selectbox("Edit Rule Type", ["Deterministic", "Skill Check", "Compliance", "Custom"], index=["Deterministic", "Skill Check", "Compliance", "Custom"].index(rule.get('type', 'Custom')) if rule.get('type', 'Custom') in ["Deterministic", "Skill Check", "Compliance", "Custom"] else 3, key=f"etype_{rule['id']}")
+            edited_criteria = st.text_area("Edit Criteria", value=rule['criteria'], key=f"ecrit_{rule['id']}")
+            
+            col_s1, col_s2 = st.columns(2)
+            if col_s1.button("💾 Save Changes", key=f"save_{rule['id']}"):
+                rule['name'] = edited_name
+                rule['type'] = edited_type
+                rule['criteria'] = edited_criteria
+                st.session_state.editing_rule_id = None
+                st.success("Rule updated successfully!")
+                st.rerun()
+            if col_s2.button("Cancel", key=f"cancel_{rule['id']}"):
+                st.session_state.editing_rule_id = None
+                st.rerun()
+            st.markdown("---")
+
     rules_to_keep.append(rule)
 st.session_state.custom_rules = rules_to_keep
 
@@ -545,7 +580,6 @@ def apply_fully_dynamic_guardrails(jd_analysis, det_analysis, combined_rule_eval
     min_req_exp = float(jd_analysis.get('minimum_experience_years', 0.0))
     candidate_tot_exp = float(det_analysis.get('total_experience_years', 0.0))
     
-    # 1. Dynamic Experience Hard Check
     experience_failed = False
     if min_req_exp > 0.0 and candidate_tot_exp < min_req_exp:
         experience_failed = True
@@ -557,11 +591,9 @@ def apply_fully_dynamic_guardrails(jd_analysis, det_analysis, combined_rule_eval
                     "reasoning": f"Dynamic Guardrail: Exp ({candidate_tot_exp}y) < JD requirement ({min_req_exp}y)."
                 }
 
-    # 2. Dynamic Rule Alignment (Check if core custom rules failed)
     failed_rule_count = sum(1 for r_name, r_data in combined_rule_evals.items() if str(r_data.get("result", "")).lower() == "fail")
     total_rules = len(combined_rule_evals)
     
-    # Fully Dynamic Decision Matrix
     if experience_failed or (failed_rule_count >= max(1, total_rules // 2)):
         recommendation = "Reject"
         overall_score = min(overall_score, 39.0 if experience_failed else 45.0)
@@ -604,7 +636,6 @@ def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
 
     overall_score = round((score_points / max(total_rules, 1)) * 100, 1)
 
-    # Apply Fully Dynamic Guardrails based on JD, CV and Rules
     combined_rule_evals, overall_score, recommendation, summary = apply_fully_dynamic_guardrails(
         jd_analysis, det_analysis, combined_rule_evals, overall_score, "Consider"
     )
@@ -678,7 +709,7 @@ if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_con
                 "summary": summary_text,
                 "word_file_io": word_file_io
             }
-            st.success("Evaluation completed successfully with fully dynamic guardrails!")
+            st.success("Evaluation completed successfully with fully editable rules!")
 
 # ------------------------------------------------------------------------------
 # RENDER UI RESULTS FROM SESSION STATE
