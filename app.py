@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.50-LineByLine-Timeline-Fix"
+LOGIC_VERSION = "v10.51-Internship-Context-Fix"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
@@ -159,8 +159,8 @@ def calculate_deterministic_timeline(cv_text: str) -> dict:
     fulltime_months = 0
     work_periods = []
     
-    # Line-by-line robust parsing for date ranges including 'Present'
-    for line in lines:
+    # Line-by-line robust parsing with surrounding context check for Internship keywords
+    for line_idx, line in enumerate(lines):
         line_lower = line.lower()
         
         # Skip education lines
@@ -175,14 +175,16 @@ def calculate_deterministic_timeline(cv_text: str) -> dict:
                 start_str = parts[i]
                 end_str = parts[i+1]
                 
-                # Extract potential date strings from the split chunks
                 start_dt = parse_date_str(start_str)
                 end_dt = parse_date_str(end_str)
                 
                 if start_dt and end_dt and start_dt <= end_dt:
                     months = (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
                     if 0 < months <= 600: # sanity check (max 50 years per stint)
-                        if "intern" in line_lower or "trainee" in line_lower or "internship" in line_lower:
+                        # Check current line + up to 2 preceding lines for internship/trainee keywords
+                        context_block = " ".join(lines[max(0, line_idx - 2): line_idx + 1]).lower()
+                        
+                        if any(kw in context_block for kw in ["intern", "trainee", "internship", "apprentic"]):
                             internship_months += months
                             work_periods.append((start_dt, end_dt, "internship"))
                         else:
@@ -190,7 +192,7 @@ def calculate_deterministic_timeline(cv_text: str) -> dict:
                             work_periods.append((start_dt, end_dt, "fulltime"))
 
     # Fallback to regex pattern scan if line splitting missed anything
-    if fulltime_months == 0:
+    if fulltime_months == 0 and internship_months == 0:
         date_range_pattern = r'([A-Za-z0-9\/\-\.\s]{3,15})\s*(?:–|-|to)\s*([A-Za-z0-9\/\-\.\s]{3,15}|Present|Current|Till Date|Now)'
         matches = re.findall(date_range_pattern, cleaned_cv, re.IGNORECASE)
         for start_str, end_str in matches:
@@ -199,8 +201,14 @@ def calculate_deterministic_timeline(cv_text: str) -> dict:
             if start_dt and end_dt and start_dt <= end_dt:
                 months = (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
                 if 0 < months <= 600:
-                    fulltime_months += months
-                    work_periods.append((start_dt, end_dt, "fulltime"))
+                    pos = cleaned_cv.find(start_str)
+                    snippet_context = cleaned_cv[max(0, pos - 150): pos + 50].lower() if pos != -1 else ""
+                    if any(kw in snippet_context for kw in ["intern", "trainee", "internship", "apprentic"]):
+                        internship_months += months
+                        work_periods.append((start_dt, end_dt, "internship"))
+                    else:
+                        fulltime_months += months
+                        work_periods.append((start_dt, end_dt, "fulltime"))
 
     work_periods = sorted(work_periods, key=lambda x: x[0])
 
@@ -460,7 +468,7 @@ with col_cv:
 st.markdown("---")
 
 # Section 2: Rules Builder
-st.markdown("### 2. 🎛️ N-Rules Builder")
+st.markdown("### 2. 🎛️️ N-Rules Builder")
 with st.expander("➕ Manage Custom Evaluation Rules", expanded=False):
     new_name = st.text_input("Rule Name")
     new_type = st.selectbox("Rule Type", ["Deterministic", "Skill Check", "Compliance", "Custom"])
