@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.48-Universal-MultiFormat-Gap-Fix"
+LOGIC_VERSION = "v10.50-LineByLine-Timeline-Fix"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
@@ -153,37 +153,54 @@ def extract_experience_via_regex(text: str) -> float:
 
 def calculate_deterministic_timeline(cv_text: str) -> dict:
     cleaned_cv = cv_text.replace("'", "").replace("`", "")
-    
-    # Updated robust regex pattern for date ranges
-    date_range_pattern = r'([A-Za-z0-9\/\-\.\s]{3,15})\s*(?:–|-|to|to\s*the)+\s*([A-Za-z0-9\/\-\.\s]{3,15}|Present|Current|Till Date|Now)'
-    matches = re.findall(date_range_pattern, cleaned_cv, re.IGNORECASE)
+    lines = cleaned_cv.split('\n')
     
     internship_months = 0
     fulltime_months = 0
-    
     work_periods = []
-    for start_str, end_str in matches:
-        pos = cleaned_cv.find(start_str)
-        snippet_context = cleaned_cv[max(0, pos - 120): pos + 50].lower() if pos != -1 else ""
+    
+    # Line-by-line robust parsing for date ranges including 'Present'
+    for line in lines:
+        line_lower = line.lower()
         
+        # Skip education lines
         edu_keywords = ['b.tech', 'b.e', 'm.tech', 'b.sc', 'm.sc', 'bca', 'mca', 'mba', 'graduation', 'degree', 'cgpa', 'college', 'university', 'school', 'education', 'hsc', 'ssc']
-        if any(kw in snippet_context for kw in edu_keywords):
+        if any(kw in line_lower for kw in edu_keywords):
             continue
 
-        start_dt = parse_date_str(start_str)
-        end_dt = parse_date_str(end_str)
-        
-        if start_dt and end_dt and start_dt <= end_dt:
-            months = (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
-            if months < 0:
-                continue
-            
-            if "intern" in snippet_context or "trainee" in snippet_context or "internship" in snippet_context:
-                internship_months += months
-                work_periods.append((start_dt, end_dt, "internship"))
-            else:
-                fulltime_months += months
-                work_periods.append((start_dt, end_dt, "fulltime"))
+        # Look for date separators (–, -, to)
+        parts = re.split(r'\s*(?:–|-|to)\s*', line, flags=re.IGNORECASE)
+        if len(parts) >= 2:
+            for i in range(len(parts) - 1):
+                start_str = parts[i]
+                end_str = parts[i+1]
+                
+                # Extract potential date strings from the split chunks
+                start_dt = parse_date_str(start_str)
+                end_dt = parse_date_str(end_str)
+                
+                if start_dt and end_dt and start_dt <= end_dt:
+                    months = (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
+                    if 0 < months <= 600: # sanity check (max 50 years per stint)
+                        if "intern" in line_lower or "trainee" in line_lower or "internship" in line_lower:
+                            internship_months += months
+                            work_periods.append((start_dt, end_dt, "internship"))
+                        else:
+                            fulltime_months += months
+                            work_periods.append((start_dt, end_dt, "fulltime"))
+
+    # Fallback to regex pattern scan if line splitting missed anything
+    if fulltime_months == 0:
+        date_range_pattern = r'([A-Za-z0-9\/\-\.\s]{3,15})\s*(?:–|-|to)\s*([A-Za-z0-9\/\-\.\s]{3,15}|Present|Current|Till Date|Now)'
+        matches = re.findall(date_range_pattern, cleaned_cv, re.IGNORECASE)
+        for start_str, end_str in matches:
+            start_dt = parse_date_str(start_str)
+            end_dt = parse_date_str(end_str)
+            if start_dt and end_dt and start_dt <= end_dt:
+                months = (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
+                if 0 < months <= 600:
+                    fulltime_months += months
+                    work_periods.append((start_dt, end_dt, "fulltime"))
 
     work_periods = sorted(work_periods, key=lambda x: x[0])
 
@@ -230,20 +247,15 @@ def calculate_deterministic_timeline(cv_text: str) -> dict:
         first_work_start = merged_work_periods[0][0]
         if first_work_start > edu_end_date:
             total_gap_months = (first_work_start.year - edu_end_date.year) * 12 + (first_work_start.month - edu_end_date.month)
-            
             if total_gap_months > 0:
                 years = total_gap_months // 12
                 months = total_gap_months % 12
-                
                 parts = []
                 if years > 0:
                     parts.append(f"{years} {'Year' if years == 1 else 'Years'}")
                 if months > 0:
                     parts.append(f"{months} {'Month' if months == 1 else 'Months'}")
-                
                 education_to_job_gap_str = " ".join(parts) if parts else "0 Months"
-            else:
-                education_to_job_gap_str = "0 Months (Seamless)"
 
     return {
         "internship_experience_years": round(internship_months / 12.0, 1),
