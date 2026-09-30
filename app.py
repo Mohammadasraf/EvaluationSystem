@@ -154,8 +154,8 @@ def extract_experience_via_regex(text: str) -> float:
 def calculate_deterministic_timeline(cv_text: str) -> dict:
     cleaned_cv = cv_text.replace("'", "").replace("`", "")
     
-    # Fixed regex pattern: replaced literal \t escape sequence bug with explicit (?:–|-|to)
-    date_range_pattern = r'([A-Za-z0-9\/\-\.\s]{3,12})\s*(?:–|-|to)+\s*([A-Za-z0-9\/\-\.\s]{3,12}|Present|Current|Till Date|Now)'
+    # Updated robust regex pattern for date ranges
+    date_range_pattern = r'([A-Za-z0-9\/\-\.\s]{3,15})\s*(?:–|-|to|to\s*the)+\s*([A-Za-z0-9\/\-\.\s]{3,15}|Present|Current|Till Date|Now)'
     matches = re.findall(date_range_pattern, cleaned_cv, re.IGNORECASE)
     
     internship_months = 0
