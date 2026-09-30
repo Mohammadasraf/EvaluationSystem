@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.46-Universal-MultiFormat-Gap-Fix"
+LOGIC_VERSION = "v10.48-Universal-MultiFormat-Gap-Fix"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
@@ -93,7 +93,7 @@ def parse_date_str(date_str):
     if not date_str:
         return None
     
-    date_str = str(date_str).replace("'", "").replace("'", "").replace("`", "").strip().lower()
+    date_str = str(date_str).replace("'", "").replace("`", "").strip().lower()
     
     if any(kw in date_str for kw in ["present", "current", "till date", "continuing", "now"]):
         return datetime.datetime.now()
@@ -152,9 +152,10 @@ def extract_experience_via_regex(text: str) -> float:
     return 0.0
 
 def calculate_deterministic_timeline(cv_text: str) -> dict:
-    cleaned_cv = cv_text.replace("'", "").replace("'", "")
+    cleaned_cv = cv_text.replace("'", "").replace("`", "")
     
-    date_range_pattern = r'([A-Za-z0-9\/\-\.\s]{3,12})\s*[\–\-\to]+\s*([A-Za-z0-9\/\-\.\s]{3,12}|Present|Current|Till Date|Now)'
+    # Fixed regex pattern: replaced literal \t escape sequence bug with explicit (?:–|-|to)
+    date_range_pattern = r'([A-Za-z0-9\/\-\.\s]{3,12})\s*(?:–|-|to)+\s*([A-Za-z0-9\/\-\.\s]{3,12}|Present|Current|Till Date|Now)'
     matches = re.findall(date_range_pattern, cleaned_cv, re.IGNORECASE)
     
     internship_months = 0
@@ -220,7 +221,7 @@ def calculate_deterministic_timeline(cv_text: str) -> dict:
     edu_pos = cleaned_cv.lower().find('education')
     if edu_pos != -1:
         edu_subtext = cleaned_cv[edu_pos:edu_pos + 600]
-        sub_ranges = re.findall(r'([A-Za-z0-9\/\-\.\s]{3,12})\s*[\–\-\to]+\s*([A-Za-z0-9\/\-\.\s]{3,12})', edu_subtext, re.IGNORECASE)
+        sub_ranges = re.findall(r'([A-Za-z0-9\/\-\.\s]{3,12})\s*(?:–|-|to)+\s*([A-Za-z0-9\/\-\.\s]{3,12})', edu_subtext, re.IGNORECASE)
         if sub_ranges:
             edu_end_date = parse_date_str(sub_ranges[0][1])
 
@@ -472,7 +473,7 @@ for idx, rule in enumerate(st.session_state.custom_rules):
     c1.markdown(f"**Rule {idx+1}**")
     c2.markdown(f"**{rule['name']}**: {rule['criteria']}")
     if c3.button("❌", key=f"del_{rule['id']}"):
-        continue
+        st.rerun()
     rules_to_keep.append(rule)
 st.session_state.custom_rules = rules_to_keep
 
