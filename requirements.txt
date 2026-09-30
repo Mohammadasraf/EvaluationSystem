@@ -7,3 +7,6 @@ pillow
 pytesseract
 requests
 json-repair
+google-genai
+python-dateutil
+pydantic
