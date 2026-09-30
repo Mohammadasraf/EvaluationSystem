@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v10.51-Internship-Context-Fix"
+LOGIC_VERSION = "v11.0-Dynamic-Guardrails-Engine"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
@@ -98,7 +98,6 @@ def parse_date_str(date_str):
     if any(kw in date_str for kw in ["present", "current", "till date", "continuing", "now"]):
         return datetime.datetime.now()
     
-    # Format 1: Month and Year (e.g., 'Jan 2022' or 'January 22' or 'Jun '16')
     match = re.search(r'([a-z]+)\.?\s*[\'`]?(\d{2,4})', date_str)
     if match:
         month_str, year_str = match.groups()
@@ -115,7 +114,6 @@ def parse_date_str(date_str):
         except ValueError:
             pass
 
-    # Format 2: Numeric MM/YYYY or MM-YYYY or YYYY
     match_num = re.search(r'(\d{1,2})[/\-](\d{2,4})', date_str)
     if match_num:
         m, y = match_num.groups()
@@ -126,7 +124,6 @@ def parse_date_str(date_str):
         except ValueError:
             pass
 
-    # Format 3: Only Year (e.g., '2020')
     match_yr = re.search(r'\b(20\d{2}|19\d{2})\b', date_str)
     if match_yr:
         try:
@@ -159,31 +156,22 @@ def calculate_deterministic_timeline(cv_text: str) -> dict:
     fulltime_months = 0
     work_periods = []
     
-    # Line-by-line robust parsing with surrounding context check for Internship keywords
     for line_idx, line in enumerate(lines):
         line_lower = line.lower()
-        
-        # Skip education lines
         edu_keywords = ['b.tech', 'b.e', 'm.tech', 'b.sc', 'm.sc', 'bca', 'mca', 'mba', 'graduation', 'degree', 'cgpa', 'college', 'university', 'school', 'education', 'hsc', 'ssc']
         if any(kw in line_lower for kw in edu_keywords):
             continue
 
-        # Look for date separators (–, -, to)
         parts = re.split(r'\s*(?:–|-|to)\s*', line, flags=re.IGNORECASE)
         if len(parts) >= 2:
             for i in range(len(parts) - 1):
-                start_str = parts[i]
-                end_str = parts[i+1]
-                
-                start_dt = parse_date_str(start_str)
-                end_dt = parse_date_str(end_str)
+                start_dt = parse_date_str(parts[i])
+                end_dt = parse_date_str(parts[i+1])
                 
                 if start_dt and end_dt and start_dt <= end_dt:
                     months = (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
-                    if 0 < months <= 600: # sanity check (max 50 years per stint)
-                        # Check current line + up to 2 preceding lines for internship/trainee keywords
+                    if 0 < months <= 600:
                         context_block = " ".join(lines[max(0, line_idx - 2): line_idx + 1]).lower()
-                        
                         if any(kw in context_block for kw in ["intern", "trainee", "internship", "apprentic"]):
                             internship_months += months
                             work_periods.append((start_dt, end_dt, "internship"))
@@ -191,7 +179,6 @@ def calculate_deterministic_timeline(cv_text: str) -> dict:
                             fulltime_months += months
                             work_periods.append((start_dt, end_dt, "fulltime"))
 
-    # Fallback to regex pattern scan if line splitting missed anything
     if fulltime_months == 0 and internship_months == 0:
         date_range_pattern = r'([A-Za-z0-9\/\-\.\s]{3,15})\s*(?:–|-|to)\s*([A-Za-z0-9\/\-\.\s]{3,15}|Present|Current|Till Date|Now)'
         matches = re.findall(date_range_pattern, cleaned_cv, re.IGNORECASE)
@@ -211,7 +198,6 @@ def calculate_deterministic_timeline(cv_text: str) -> dict:
                         work_periods.append((start_dt, end_dt, "fulltime"))
 
     work_periods = sorted(work_periods, key=lambda x: x[0])
-
     merged_work_periods = []
     for period in work_periods:
         if not merged_work_periods:
@@ -304,17 +290,19 @@ def extract_text_with_ocr(uploaded_file) -> str:
     return text
 
 def extract_jd_requirements(jd_text: str, groq_api_key: str) -> dict:
-    system_prompt = "Extract key quantitative criteria from the Job Description into strict JSON. Return ONLY JSON."
+    system_prompt = "Extract key quantitative criteria and core domains from the Job Description into strict JSON. Return ONLY JSON."
     user_prompt = f"""
 Analyze this Job Description and extract:
 1. "minimum_experience_years": float number representing minimum years required (e.g., 6.0 for 6 years). If not specified, return 0.0.
+2. "critical_keywords": list of top 3 critical technical skills or tools required.
 
 JD TEXT:
 {jd_text}
 
 Return JSON:
 {{
-  "minimum_experience_years": 0.0
+  "minimum_experience_years": 0.0,
+  "critical_keywords": ["python", "sql"]
 }}
 """
     try:
@@ -323,7 +311,7 @@ Return JSON:
             model=MODEL_VERSION,
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
             temperature=0.0,
-            max_tokens=200
+            max_tokens=250
         )
         content = completion.choices[0].message.content.strip()
         if "```json" in content:
@@ -331,11 +319,14 @@ Return JSON:
         elif "```" in content:
             content = content.split("```")[1].split("```")[0].strip()
         parsed = json.loads(repair_json(content))
-        return {"minimum_experience_years": float(parsed.get("minimum_experience_years", 0.0) or 0.0)}
+        return {
+            "minimum_experience_years": float(parsed.get("minimum_experience_years", 0.0) or 0.0),
+            "critical_keywords": parsed.get("critical_keywords", [])
+        }
     except Exception:
         match = re.search(r'(\d+)\+?\s*years?', jd_text, re.IGNORECASE)
         val = float(match.group(1)) if match else 0.0
-        return {"minimum_experience_years": val}
+        return {"minimum_experience_years": val, "critical_keywords": []}
 
 def extract_universal_evidence(cv_text: str) -> dict:
     lines = [line.strip() for line in cv_text.split("\n") if len(line.strip()) > 25]
@@ -393,11 +384,11 @@ def generate_in_memory_word_report(candidate_name, recruiter_id, overall_score, 
 st.set_page_config(page_title="Universal Enterprise Candidate Evaluator", layout="wide")
 
 st.title("⚡ Universal Enterprise Candidate Evaluation System (In-Memory)")
-st.caption("Deterministic Math Engine + LLM Precision + 100% Browser-Based Processing")
+st.caption("Dynamic Math Engine + AI Precision + Fully Adaptive Rules & Guardrails")
 
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = [
-        {"id": 1, "name": "Technical & Domain Competency", "type": "AI Evaluation", "criteria": "Candidate possesses required technical stack/skills mentioned in JD. (Allow partial match if core stack is strong and secondary tools are missing)."},
+        {"id": 1, "name": "Technical & Domain Competency", "type": "AI Evaluation", "criteria": "Candidate possesses required technical stack/skills mentioned in JD."},
         {"id": 2, "name": "Work Experience", "type": "Deterministic", "criteria": "Meets or exceeds minimum required professional experience."},
         {"id": 3, "name": "Project Relevance", "type": "AI Evaluation", "criteria": "Previous project exposure aligns with job responsibilities."},
         {"id": 4, "name": "Career Stability", "type": "Deterministic", "criteria": "No unexplained erratic career switches or major gaps."},
@@ -468,7 +459,7 @@ with col_cv:
 st.markdown("---")
 
 # Section 2: Rules Builder
-st.markdown("### 2. 🎛️️ N-Rules Builder")
+st.markdown("### 2. 🎛 N-Rules Builder")
 with st.expander("➕ Manage Custom Evaluation Rules", expanded=False):
     new_name = st.text_input("Rule Name")
     new_type = st.selectbox("Rule Type", ["Deterministic", "Skill Check", "Compliance", "Custom"])
@@ -500,7 +491,7 @@ st.session_state.custom_rules = rules_to_keep
 st.markdown("---")
 
 # ------------------------------------------------------------------------------
-# EVALUATION & GUARDRAIL ENGINE
+# EVALUATION & FULLY DYNAMIC GUARDRAIL ENGINE
 # ------------------------------------------------------------------------------
 def evaluate_batch_chunk(cv_text, jd_text, rule_chunk, groq_api_key):
     system_prompt = (
@@ -510,7 +501,7 @@ def evaluate_batch_chunk(cv_text, jd_text, rule_chunk, groq_api_key):
     )
     
     user_prompt = f"""
-Evaluate the candidate against the rules subset.
+Evaluate the candidate against the rules subset dynamically based on the provided JD and Resume.
 
 --- JOB DESCRIPTION ---
 {jd_text}
@@ -550,25 +541,40 @@ Return ONLY valid JSON:
         fallback_evals = {rule['name']: {"result": "Pass", "confidence": "50%", "reasoning": "Fallback recovered."} for rule in rule_chunk}
         return {"Rule Evaluations": fallback_evals}
 
-def apply_deterministic_guardrails(jd_analysis, det_analysis, combined_rule_evals, overall_score, recommendation):
+def apply_fully_dynamic_guardrails(jd_analysis, det_analysis, combined_rule_evals, overall_score, recommendation):
     min_req_exp = float(jd_analysis.get('minimum_experience_years', 0.0))
     candidate_tot_exp = float(det_analysis.get('total_experience_years', 0.0))
     
+    # 1. Dynamic Experience Hard Check
+    experience_failed = False
     if min_req_exp > 0.0 and candidate_tot_exp < min_req_exp:
-        recommendation = "Reject"
-        overall_score = min(overall_score, 40.0)
-        
+        experience_failed = True
         for r_name in combined_rule_evals:
             if "experience" in r_name.lower() or "work" in r_name.lower():
                 combined_rule_evals[r_name] = {
                     "result": "Fail",
                     "confidence": "100%",
-                    "reasoning": f"Hard check: Candidate experience ({candidate_tot_exp}y) is less than JD requirement ({min_req_exp}y)."
+                    "reasoning": f"Dynamic Guardrail: Exp ({candidate_tot_exp}y) < JD requirement ({min_req_exp}y)."
                 }
-        summary = f"Candidate failed hard experience requirement (Required: {min_req_exp}y, Found: {candidate_tot_exp}y)."
+
+    # 2. Dynamic Rule Alignment (Check if core custom rules failed)
+    failed_rule_count = sum(1 for r_name, r_data in combined_rule_evals.items() if str(r_data.get("result", "")).lower() == "fail")
+    total_rules = len(combined_rule_evals)
+    
+    # Fully Dynamic Decision Matrix
+    if experience_failed or (failed_rule_count >= max(1, total_rules // 2)):
+        recommendation = "Reject"
+        overall_score = min(overall_score, 39.0 if experience_failed else 45.0)
+        summary = f"Candidate rejected via dynamic guardrails (Exp shortfall or major rule failures)."
+    elif overall_score >= 80 and failed_rule_count == 0:
+        recommendation = "Strong Hire"
+    elif overall_score >= 40:
+        recommendation = "Consider / Request Updated CV"
     else:
-        summary = "Candidate met required thresholds."
-        
+        recommendation = "Reject"
+        overall_score = min(overall_score, 40.0)
+        summary = f"Candidate score fell below viable threshold."
+
     return combined_rule_evals, overall_score, recommendation, summary
 
 def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
@@ -597,15 +603,10 @@ def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
                 score_points += 0.7
 
     overall_score = round((score_points / max(total_rules, 1)) * 100, 1)
-    if overall_score >= 80:
-        recommendation = "Strong Hire"
-    elif overall_score >= 40:
-        recommendation = "Consider / Request Updated CV"
-    else:
-        recommendation = "Reject"
 
-    combined_rule_evals, overall_score, recommendation, summary = apply_deterministic_guardrails(
-        jd_analysis, det_analysis, combined_rule_evals, overall_score, recommendation
+    # Apply Fully Dynamic Guardrails based on JD, CV and Rules
+    combined_rule_evals, overall_score, recommendation, summary = apply_fully_dynamic_guardrails(
+        jd_analysis, det_analysis, combined_rule_evals, overall_score, "Consider"
     )
 
     final_output = {
@@ -617,13 +618,13 @@ def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
 
     return det_analysis, evidence_map, final_output
 
-if st.button("🚀 Run Deterministic Precision Evaluation", type="primary", use_container_width=True):
+if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_container_width=True):
     if not groq_api_key:
         st.error("Groq API Key is required.")
     elif not cv_text or not jd_text:
         st.warning("Please provide both JD and Candidate Resume.")
     else:
-        with st.spinner("Processing deterministic timeline calculations and rule evaluation..."):
+        with st.spinner("Running fully dynamic JD-CV-Rules guardrail matrix..."):
             cv_name = cv_file.name if (cv_file and hasattr(cv_file, 'name')) else "Pasted CV Text"
             jd_name = jd_file.name if (jd_file and hasattr(jd_file, 'name')) else "Pasted JD Text"
 
@@ -653,7 +654,7 @@ if st.button("🚀 Run Deterministic Precision Evaluation", type="primary", use_
                 candidate_name,
                 overall_score,
                 rec,
-                "Deterministic Math Guardrail Evaluation",
+                "Fully Dynamic Guardrail Evaluation",
                 "",
                 cv_name,
                 jd_name,
@@ -677,7 +678,7 @@ if st.button("🚀 Run Deterministic Precision Evaluation", type="primary", use_
                 "summary": summary_text,
                 "word_file_io": word_file_io
             }
-            st.success("Evaluation completed successfully with universal date parsing!")
+            st.success("Evaluation completed successfully with fully dynamic guardrails!")
 
 # ------------------------------------------------------------------------------
 # RENDER UI RESULTS FROM SESSION STATE
@@ -702,7 +703,6 @@ if st.session_state.evaluation_results is not None:
         type="primary"
     )
 
-    # --- AI Recommendation & Status Badge Section ---
     st.markdown("### 📌 AI Recommendation & Verdict")
     if "Strong Hire" in rec:
         st.success(f"**Recommended Status:** {rec}")
@@ -711,7 +711,6 @@ if st.session_state.evaluation_results is not None:
     else:
         st.error(f"**Recommended Status:** {rec}")
 
-    # --- Evaluation Summary Note & Recruiter Suggestions UI Section ---
     st.markdown("### 📋 Evaluation Summary Note, Conclusion & Recruiter Suggestions")
     
     if overall_score >= 80:
@@ -750,7 +749,6 @@ if st.session_state.evaluation_results is not None:
     m3.metric("Intern Exp", in_exp)
     m4.metric("Total Experience", tot_exp)
 
-    # --- Career & Education Gap Breakdown Section ---
     st.markdown("### 🔍 Career & Education Gap Breakdown (Math Calculated)")
     col_g1, col_g2 = st.columns(2)
     
