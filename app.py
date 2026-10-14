@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v12.0-Dynamic-Rules-Editor"
+LOGIC_VERSION = "v13.0-Universal-AI-Engine"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
@@ -95,7 +95,7 @@ def parse_date_str(date_str):
     
     date_str = str(date_str).replace("'", "").replace("`", "").strip().lower()
     
-    if any(kw in date_str for kw in ["present", "current", "till date", "continuing", "now"]):
+    if any(kw in date_str for kw in ["present", "current", "till date", "continuing", "now", "today"]):
         return datetime.datetime.now()
     
     match = re.search(r'([a-z]+)\.?\s*[\'`]?(\d{2,4})', date_str)
@@ -148,73 +148,110 @@ def extract_experience_via_regex(text: str) -> float:
                 continue
     return 0.0
 
-def calculate_deterministic_timeline(cv_text: str) -> dict:
-    cleaned_cv = cv_text.replace("'", "").replace("`", "")
-    lines = cleaned_cv.split('\n')
+def calculate_deterministic_timeline(cv_text: str, groq_api_key: str = "") -> dict:
+    cleaned_cv = cv_text.replace("|", " ").replace("`", "").replace("'", "")
     
-    internship_months = 0
-    fulltime_months = 0
     work_periods = []
+    extracted_jobs = []
     
-    for line_idx, line in enumerate(lines):
-        line_lower = line.lower()
-        edu_keywords = ['b.tech', 'b.e', 'm.tech', 'b.sc', 'm.sc', 'bca', 'mca', 'mba', 'graduation', 'degree', 'cgpa', 'college', 'university', 'school', 'education', 'hsc', 'ssc']
-        if any(kw in line_lower for kw in edu_keywords):
-            continue
+    # 1. AI Extraction for 100% Universal Format Support (Europass, Tables, Multi-column, etc.)
+    if groq_api_key:
+        try:
+            client = Groq(api_key=groq_api_key.strip())
+            prompt = f"""
+Extract all professional work experience periods from this resume. 
+STRICTLY IGNORE education, degrees, diplomas, and certifications.
+For each job, specify if it is an internship (true/false).
+Return ONLY valid JSON format:
+[
+  {{"role": "Software Engineer", "company": "ABC", "start_date": "MM/YYYY", "end_date": "MM/YYYY or Present", "is_internship": false}}
+]
 
-        parts = re.split(r'\s*(?:–|-|to)\s*', line, flags=re.IGNORECASE)
-        if len(parts) >= 2:
-            for i in range(len(parts) - 1):
-                start_dt = parse_date_str(parts[i])
-                end_dt = parse_date_str(parts[i+1])
-                
-                if start_dt and end_dt and start_dt <= end_dt:
-                    months = (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
-                    if 0 < months <= 600:
-                        context_block = " ".join(lines[max(0, line_idx - 2): line_idx + 1]).lower()
-                        if any(kw in context_block for kw in ["intern", "trainee", "internship", "apprentic"]):
-                            internship_months += months
-                            work_periods.append((start_dt, end_dt, "internship"))
-                        else:
-                            fulltime_months += months
-                            work_periods.append((start_dt, end_dt, "fulltime"))
+RESUME TEXT:
+{cleaned_cv}
+"""
+            completion = client.chat.completions.create(
+                model=MODEL_VERSION,
+                messages=[{"role": "system", "content": "Extract structured work history JSON only."}, {"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=800
+            )
+            content = completion.choices[0].message.content.strip()
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
+            extracted_jobs = json.loads(repair_json(content))
+        except Exception:
+            extracted_jobs = []
 
-    if fulltime_months == 0 and internship_months == 0:
-        date_range_pattern = r'([A-Za-z0-9\/\-\.\s]{3,15})\s*(?:–|-|to)\s*([A-Za-z0-9\/\-\.\s]{3,15}|Present|Current|Till Date|Now)'
-        matches = re.findall(date_range_pattern, cleaned_cv, re.IGNORECASE)
-        for start_str, end_str in matches:
-            start_dt = parse_date_str(start_str)
-            end_dt = parse_date_str(end_str)
+    # 2. Process AI Extracted Jobs with Exact Date Parsing
+    if extracted_jobs and isinstance(extracted_jobs, list):
+        for job in extracted_jobs:
+            start_dt = parse_date_str(job.get("start_date"))
+            end_dt = parse_date_str(job.get("end_date"))
+            is_intern = bool(job.get("is_internship", False))
+            
             if start_dt and end_dt and start_dt <= end_dt:
                 months = (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
                 if 0 < months <= 600:
-                    pos = cleaned_cv.find(start_str)
-                    snippet_context = cleaned_cv[max(0, pos - 150): pos + 50].lower() if pos != -1 else ""
-                    if any(kw in snippet_context for kw in ["intern", "trainee", "internship", "apprentic"]):
-                        internship_months += months
+                    if is_intern:
                         work_periods.append((start_dt, end_dt, "internship"))
                     else:
-                        fulltime_months += months
                         work_periods.append((start_dt, end_dt, "fulltime"))
 
-    work_periods = sorted(work_periods, key=lambda x: x[0])
-    merged_work_periods = []
-    for period in work_periods:
-        if not merged_work_periods:
-            merged_work_periods.append(period)
-        else:
-            prev_start, prev_end, prev_type = merged_work_periods[-1]
-            curr_start, curr_end, curr_type = period
-            if curr_start <= prev_end:
-                new_end = max(prev_end, curr_end)
-                merged_work_periods[-1] = (prev_start, new_end, prev_type)
-            else:
-                merged_work_periods.append(period)
+    # 3. Fallback Regex Parsing if AI fails
+    if not work_periods:
+        lines = cleaned_cv.split('\n')
+        for line_idx, line in enumerate(lines):
+            line_lower = line.lower()
+            if any(kw in line_lower for kw in ['b.tech', 'b.e', 'm.tech', 'b.sc', 'm.sc', 'bca', 'mca', 'mba', 'graduation', 'degree', 'cgpa', 'college', 'university', 'school', 'education', 'hsc', 'ssc', 'diploma']):
+                continue
 
+            parts = re.split(r'\s*(?:–|-|to)\s*', line, flags=re.IGNORECASE)
+            if len(parts) >= 2:
+                for i in range(len(parts) - 1):
+                    start_dt = parse_date_str(parts[i])
+                    end_dt = parse_date_str(parts[i+1])
+                    if start_dt and end_dt and start_dt <= end_dt:
+                        months = (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
+                        if 0 < months <= 600:
+                            context_block = " ".join(lines[max(0, line_idx - 2): line_idx + 1]).lower()
+                            if any(kw in context_block for kw in ["intern", "trainee", "internship", "apprentic"]):
+                                work_periods.append((start_dt, end_dt, "internship"))
+                            else:
+                                work_periods.append((start_dt, end_dt, "fulltime"))
+
+    # 4. Sort and Merge Overlapping Periods Accurately
+    work_periods = sorted(work_periods, key=lambda x: x[0])
+    
+    ft_periods = [p for p in work_periods if p[2] == "fulltime"]
+    in_periods = [p for p in work_periods if p[2] == "internship"]
+
+    def merge_intervals(intervals):
+        merged = []
+        for start, end, ptype in intervals:
+            if not merged:
+                merged.append([start, end, ptype])
+            else:
+                prev_start, prev_end, _ = merged[-1]
+                if start <= prev_end:
+                    merged[-1][1] = max(prev_end, end)
+                else:
+                    merged.append([start, end, ptype])
+        return merged
+
+    merged_ft = merge_intervals(ft_periods)
+    merged_in = merge_intervals(in_periods)
+
+    fulltime_months = sum((end.year - start.year) * 12 + (end.month - start.month) + 1 for start, end, _ in merged_ft)
+    internship_months = sum((end.year - start.year) * 12 + (end.month - start.month) + 1 for start, end, _ in merged_in)
+
+    # 5. Precise Experience Gaps Calculation
     exp_gaps = []
-    for i in range(len(merged_work_periods) - 1):
-        current_end = merged_work_periods[i][1]
-        next_start = merged_work_periods[i+1][0]
+    for i in range(len(merged_ft) - 1):
+        current_end = merged_ft[i][1]
+        next_start = merged_ft[i+1][0]
         if next_start > current_end:
             gap_months = (next_start.year - current_end.year) * 12 + (next_start.month - current_end.month) - 1
             if gap_months >= 2:
@@ -223,11 +260,13 @@ def calculate_deterministic_timeline(cv_text: str) -> dict:
     if not exp_gaps:
         exp_gaps = ["No major experience gaps found"]
 
-    calculated_total_years = round((fulltime_months + internship_months) / 12.0, 1)
+    calculated_total_years = round(fulltime_months / 12.0, 1)
+    internship_years = round(internship_months / 12.0, 1)
+
     if calculated_total_years == 0.0:
         calculated_total_years = extract_experience_via_regex(cv_text)
-        fulltime_months = int(calculated_total_years * 12)
 
+    # 6. Clean Education-to-Job Gap Calculation
     edu_end_date = None
     edu_pos = cleaned_cv.lower().find('education')
     if edu_pos != -1:
@@ -237,8 +276,8 @@ def calculate_deterministic_timeline(cv_text: str) -> dict:
             edu_end_date = parse_date_str(sub_ranges[0][1])
 
     education_to_job_gap_str = "0 Months (Seamless)"
-    if edu_end_date and merged_work_periods:
-        first_work_start = merged_work_periods[0][0]
+    if edu_end_date and merged_ft:
+        first_work_start = merged_ft[0][0]
         if first_work_start > edu_end_date:
             total_gap_months = (first_work_start.year - edu_end_date.year) * 12 + (first_work_start.month - edu_end_date.month)
             if total_gap_months > 0:
@@ -252,9 +291,9 @@ def calculate_deterministic_timeline(cv_text: str) -> dict:
                 education_to_job_gap_str = " ".join(parts) if parts else "0 Months"
 
     return {
-        "internship_experience_years": round(internship_months / 12.0, 1),
-        "fulltime_experience_years": round(fulltime_months / 12.0, 1),
-        "total_experience_years": max(calculated_total_years, round((fulltime_months + internship_months) / 12.0, 1)),
+        "internship_experience_years": internship_years,
+        "fulltime_experience_years": calculated_total_years,
+        "total_experience_years": calculated_total_years,
         "experience_gaps": exp_gaps,
         "education_gaps": ["No education gaps found"],
         "education_to_job_gap": education_to_job_gap_str
@@ -497,9 +536,8 @@ for idx, rule in enumerate(st.session_state.custom_rules):
         if st.session_state.editing_rule_id == rule['id']:
             st.session_state.editing_rule_id = None
         st.rerun()
-        continue # Skip keeping this rule
+        continue
         
-    # Inline editing block if this rule is selected for editing
     if st.session_state.editing_rule_id == rule['id']:
         with st.container():
             st.markdown(f"--- \n **✏️ Editing Rule #{idx+1} ({rule['name']})**")
@@ -613,7 +651,7 @@ def apply_fully_dynamic_guardrails(jd_analysis, det_analysis, combined_rule_eval
 
 def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
     jd_analysis = extract_jd_requirements(jd_text, groq_api_key)
-    profile_details = calculate_deterministic_timeline(cv_text)
+    profile_details = calculate_deterministic_timeline(cv_text, groq_api_key)
     evidence_map = extract_universal_evidence(cv_text)
 
     det_analysis = profile_details
