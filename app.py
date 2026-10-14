@@ -597,15 +597,17 @@ def apply_fully_dynamic_guardrails(jd_analysis, det_analysis, combined_rule_eval
     if experience_failed or (failed_rule_count >= max(1, total_rules // 2)):
         recommendation = "Reject"
         overall_score = min(overall_score, 39.0 if experience_failed else 45.0)
-        summary = f"Candidate rejected via dynamic guardrails (Exp shortfall or major rule failures)."
+        summary = "Candidate rejected via dynamic guardrails (Exp shortfall or major rule failures)."
     elif overall_score >= 80 and failed_rule_count == 0:
         recommendation = "Strong Hire"
+        summary = "Candidate meets all criteria excellently and qualifies as a strong hire."
     elif overall_score >= 40:
         recommendation = "Consider / Request Updated CV"
+        summary = "Candidate demonstrates a moderate match and warrants further evaluation or clarification."
     else:
         recommendation = "Reject"
         overall_score = min(overall_score, 40.0)
-        summary = f"Candidate score fell below viable threshold."
+        summary = "Candidate score fell below viable threshold."
 
     return combined_rule_evals, overall_score, recommendation, summary
 
