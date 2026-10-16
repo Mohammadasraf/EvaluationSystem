@@ -422,7 +422,7 @@ def generate_in_memory_word_report(candidate_name, recruiter_id, overall_score, 
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="Universal Enterprise Candidate Evaluator", layout="wide")
 
-st.title("⚡ Universal Enterprise Candidate Evaluation System (In-Memory)")
+st.title("⚡ Universal Enterprise Candidate Evaluation System")
 st.caption("Dynamic Math Engine + AI Precision + Fully Editable Rules & Guardrails")
 
 if "custom_rules" not in st.session_state:
