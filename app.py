@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v13.0-Universal-AI-Engine"
+LOGIC_VERSION = "v14.0-Balanced-Gap-Engine"
 
 # ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
@@ -154,7 +154,6 @@ def calculate_deterministic_timeline(cv_text: str, groq_api_key: str = "") -> di
     work_periods = []
     extracted_jobs = []
     
-    # 1. AI Extraction for 100% Universal Format Support (Europass, Tables, Multi-column, etc.)
     if groq_api_key:
         try:
             client = Groq(api_key=groq_api_key.strip())
@@ -185,7 +184,6 @@ RESUME TEXT:
         except Exception:
             extracted_jobs = []
 
-    # 2. Process AI Extracted Jobs with Exact Date Parsing
     if extracted_jobs and isinstance(extracted_jobs, list):
         for job in extracted_jobs:
             start_dt = parse_date_str(job.get("start_date"))
@@ -200,7 +198,6 @@ RESUME TEXT:
                     else:
                         work_periods.append((start_dt, end_dt, "fulltime"))
 
-    # 3. Fallback Regex Parsing if AI fails
     if not work_periods:
         lines = cleaned_cv.split('\n')
         for line_idx, line in enumerate(lines):
@@ -222,7 +219,6 @@ RESUME TEXT:
                             else:
                                 work_periods.append((start_dt, end_dt, "fulltime"))
 
-    # 4. Sort and Merge Overlapping Periods Accurately
     work_periods = sorted(work_periods, key=lambda x: x[0])
     
     ft_periods = [p for p in work_periods if p[2] == "fulltime"]
@@ -247,7 +243,6 @@ RESUME TEXT:
     fulltime_months = sum((end.year - start.year) * 12 + (end.month - start.month) + 1 for start, end, _ in merged_ft)
     internship_months = sum((end.year - start.year) * 12 + (end.month - start.month) + 1 for start, end, _ in merged_in)
 
-    # 5. Precise Experience Gaps Calculation
     exp_gaps = []
     for i in range(len(merged_ft) - 1):
         current_end = merged_ft[i][1]
@@ -266,7 +261,6 @@ RESUME TEXT:
     if calculated_total_years == 0.0:
         calculated_total_years = extract_experience_via_regex(cv_text)
 
-    # 6. Clean Education-to-Job Gap Calculation
     edu_end_date = None
     edu_pos = cleaned_cv.lower().find('education')
     if edu_pos != -1:
@@ -423,7 +417,7 @@ def generate_in_memory_word_report(candidate_name, recruiter_id, overall_score, 
 st.set_page_config(page_title="Universal Enterprise Candidate Evaluator", layout="wide")
 
 st.title("⚡ Universal Enterprise Candidate Evaluation System")
-st.caption("Dynamic Math Engine + AI Precision + Fully Editable Rules & Guardrails")
+st.caption("Dynamic Math Engine + AI Precision + Contextual Gap Guardrails")
 
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = [
@@ -566,15 +560,19 @@ st.markdown("---")
 # ------------------------------------------------------------------------------
 # EVALUATION & FULLY DYNAMIC GUARDRAIL ENGINE
 # ------------------------------------------------------------------------------
-def evaluate_batch_chunk(cv_text, jd_text, rule_chunk, groq_api_key):
+def evaluate_batch_chunk(cv_text, jd_text, rule_chunk, groq_api_key, det_analysis=None):
     system_prompt = (
         "You are an expert HR AI evaluator. "
         "Evaluate rules using three statuses: 'Pass', 'Partial Match', or 'Fail'. "
         "Return ONLY valid JSON format matching the requested structure without markdown code blocks."
     )
     
+    gaps_summary = ""
+    if det_analysis and "experience_gaps" in det_analysis:
+        gaps_summary = "\n--- CALCULATED EXPERIENCE GAPS (MATH ENGINE) ---\n" + "\n".join(det_analysis["experience_gaps"])
+
     user_prompt = f"""
-Evaluate the candidate against the rules subset dynamically based on the provided JD and Resume.
+Evaluate the candidate against the rules subset dynamically based on the provided JD, Resume, and Math Analysis.
 
 --- JOB DESCRIPTION ---
 {jd_text}
@@ -584,6 +582,9 @@ Evaluate the candidate against the rules subset dynamically based on the provide
 
 --- RESUME ---
 {cv_text}
+{gaps_summary}
+
+IMPORTANT: If there are major career gaps listed above, 'Career Stability' MUST NOT be marked as Pass with 'no major gaps'. It should be 'Partial Match' or 'Fail'.
 
 Return ONLY valid JSON:
 {{
@@ -617,7 +618,20 @@ Return ONLY valid JSON:
 def apply_fully_dynamic_guardrails(jd_analysis, det_analysis, combined_rule_evals, overall_score, recommendation):
     min_req_exp = float(jd_analysis.get('minimum_experience_years', 0.0))
     candidate_tot_exp = float(det_analysis.get('total_experience_years', 0.0))
+    exp_gaps = det_analysis.get("experience_gaps", [])
     
+    has_real_gaps = any("Gap of" in gap for gap in exp_gaps)
+
+    # Contextual override for Career Stability
+    for r_name in combined_rule_evals:
+        if "career stability" in r_name.lower() or "stability" in r_name.lower():
+            if has_real_gaps:
+                combined_rule_evals[r_name] = {
+                    "result": "Partial Match",
+                    "confidence": "85%",
+                    "reasoning": f"Flagged: Candidate has strong senior experience but {len(exp_gaps)} employment gaps detected."
+                }
+
     experience_failed = False
     if min_req_exp > 0.0 and candidate_tot_exp < min_req_exp:
         experience_failed = True
@@ -636,6 +650,10 @@ def apply_fully_dynamic_guardrails(jd_analysis, det_analysis, combined_rule_eval
         recommendation = "Reject"
         overall_score = min(overall_score, 39.0 if experience_failed else 45.0)
         summary = "Candidate rejected via dynamic guardrails (Exp shortfall or major rule failures)."
+    elif has_real_gaps:
+        recommendation = "Consider / Request Updated CV"
+        overall_score = min(overall_score, 75.0)
+        summary = f"Candidate has strong overall experience ({candidate_tot_exp} yrs), but {len(exp_gaps)} career gaps were detected that require recruiter clarification."
     elif overall_score >= 80 and failed_rule_count == 0:
         recommendation = "Strong Hire"
         summary = "Candidate meets all criteria excellently and qualifies as a strong hire."
@@ -664,7 +682,7 @@ def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
     total_rules = len(rules_list)
 
     for chunk in rule_chunks:
-        res = evaluate_batch_chunk(cv_text, jd_text, chunk, groq_api_key)
+        res = evaluate_batch_chunk(cv_text, jd_text, chunk, groq_api_key, det_analysis=det_analysis)
         evals = res.get("Rule Evaluations", {})
         for r_name, r_data in evals.items():
             combined_rule_evals[r_name] = r_data
@@ -725,7 +743,7 @@ if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_con
                 candidate_name,
                 overall_score,
                 rec,
-                "Fully Dynamic Guardrail Evaluation",
+                "Contextual Dynamic Guardrail Evaluation",
                 "",
                 cv_name,
                 jd_name,
@@ -749,7 +767,7 @@ if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_con
                 "summary": summary_text,
                 "word_file_io": word_file_io
             }
-            st.success("Evaluation completed successfully with fully editable rules!")
+            st.success("Evaluation completed successfully!")
 
 # ------------------------------------------------------------------------------
 # RENDER UI RESULTS FROM SESSION STATE
@@ -784,12 +802,16 @@ if st.session_state.evaluation_results is not None:
 
     st.markdown("### 📋 Evaluation Summary Note, Conclusion & Recruiter Suggestions")
     
-    if overall_score >= 80:
+    exp_gaps_list = det_analysis.get("experience_gaps", [])
+    has_gaps = any("Gap of" in gap for gap in exp_gaps_list)
+
+    if overall_score >= 80 and not has_gaps:
         conclusion_html = "✅ High Potential / Ready for Interview"
         next_step_msg = "Strong alignment with core JD requirements. Recommend scheduling an initial technical interview."
-    elif overall_score >= 40:
-        conclusion_html = "⚠️ Moderate Match / Needs Clarification"
-        next_step_msg = "Candidate shows partial alignment. Probe into missing skills or request an updated resume."
+    elif has_gaps or overall_score >= 40:
+        conclusion_html = "⚠️ Moderate Match / Needs Clarification (Gaps Detected)"
+        gap_str = ", ".join(exp_gaps_list) if has_gaps else "employment timeline"
+        next_step_msg = f"Candidate demonstrates strong technical alignment. Do not reject immediately, but probe into the following gaps during initial screening: {gap_str}."
     else:
         conclusion_html = "❌ Low Alignment / Not Recommended"
         next_step_msg = "Significant gaps found against core JD requirements. Recommend sending a polite rejection notice."
@@ -799,13 +821,14 @@ if st.session_state.evaluation_results is not None:
 
     st.info(
         f"**Conclusion Status:** {conclusion_html}\n\n"
-        f"**Overall Score:** {overall_score}/100 | **Total Experience:** {tot_exp_formatted} | **Education-to-Job Gap:** {edu_gap_formatted}"
+        f"**Overall Score:** {overall_score}/100 | **Total Experience:** {tot_exp_formatted} | **Education-to-Job Gap:** {edu_gap_formatted}\n\n"
+        f"**Summary:** {summary_text}"
     )
 
     st.markdown("#### 💡 Actionable Suggestions for Recruiter")
     st.markdown(f"1. **Next Step:** {next_step_msg}")
     
-    failed_rules = [r_name for r_name, r_data in rule_evals.items() if str(r_data.get("result", "")).lower() == "fail"]
+    failed_rules = [r_name for r_name, r_data in rule_evals.items() if str(r_data.get("result", "")).lower() in ["fail", "partial match"]]
     weak_areas = ", ".join(failed_rules) if failed_rules else "Technical & Domain Competency, Overall Profile Fit"
     st.markdown(f"2. **Missing/Weak Areas to Probe:** {weak_areas}")
 
@@ -825,7 +848,6 @@ if st.session_state.evaluation_results is not None:
     
     with col_g1:
         st.markdown("#### 💼 Experience Gaps")
-        exp_gaps_list = det_analysis.get("experience_gaps", ["No major experience gaps found"])
         if isinstance(exp_gaps_list, list) and len(exp_gaps_list) > 0:
             for gap in exp_gaps_list:
                 st.markdown(f"- {gap}")
