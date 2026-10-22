@@ -249,7 +249,7 @@ RESUME TEXT:
         next_start = merged_ft[i+1][0]
         if next_start > current_end:
             gap_months = (next_start.year - current_end.year) * 12 + (next_start.month - current_end.month) - 1
-            if gap_months >= 2:
+            if gap_months >= 1:
                 exp_gaps.append(f"Gap of {gap_months} months between {current_end.strftime('%b %Y')} and {next_start.strftime('%b %Y')}")
 
     if not exp_gaps:
