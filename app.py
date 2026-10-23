@@ -27,6 +27,26 @@ MODEL_VERSION = "openai/gpt-oss-20b"
 LOGIC_VERSION = "v14.0-Balanced-Gap-Engine"
 
 # ------------------------------------------------------------------------------
+# PII ANONYMIZATION & MASKING ENGINE
+# ------------------------------------------------------------------------------
+def mask_pii_in_text(text: str) -> str:
+    """Masks names, emails, phone numbers, and common location keywords to protect personal info."""
+    if not text:
+        return ""
+    
+    # Mask Emails
+    text = re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '[REDACTED_EMAIL]', text)
+    
+    # Mask Phone Numbers (various international and local formats)
+    text = re.sub(r'(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', '[REDACTED_PHONE]', text)
+    text = re.sub(r'\b\d{10}\b', '[REDACTED_PHONE]', text)
+    
+    # Mask URLs or LinkedIn/GitHub profile links
+    text = re.sub(r'https?://(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)', '[REDACTED_URL]', text)
+    
+    return text
+
+# ------------------------------------------------------------------------------
 # DATABASE INIT (With Automatic Schema Alignment)
 # ------------------------------------------------------------------------------
 def init_db():
@@ -417,7 +437,7 @@ def generate_in_memory_word_report(candidate_name, recruiter_id, overall_score, 
 st.set_page_config(page_title="Universal Enterprise Candidate Evaluator", layout="wide")
 
 st.title("⚡ Universal Enterprise Candidate Evaluation System")
-st.caption("Dynamic Math Engine + AI Precision + Contextual Gap Guardrails")
+st.caption("Dynamic Math Engine + AI Precision + Contextual Gap Guardrails (PII Protected)")
 
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = [
@@ -483,7 +503,7 @@ with col_jd:
 
 with col_cv:
     st.subheader("👤 Candidate Resume (CV)")
-    candidate_name = st.text_input("Candidate Full Name", value="Candidate Name")
+    candidate_name = st.text_input("Candidate Full Name (Masked for Storage)", value="Candidate Name")
     cv_input_type = st.radio("CV Input Method", ["File Upload", "Paste Text"], key="cv_type")
     if cv_input_type == "File Upload":
         cv_file = st.file_uploader("Upload Resume", type=["pdf", "docx", "txt", "png", "jpg"], key="cv_file")
@@ -580,7 +600,7 @@ Evaluate the candidate against the rules subset dynamically based on the provide
 --- RULES SUBSET ---
 {json.dumps(rule_chunk, indent=2)}
 
---- RESUME ---
+--- RESUME (PII MASKED) ---
 {cv_text}
 {gaps_summary}
 
@@ -668,9 +688,12 @@ def apply_fully_dynamic_guardrails(jd_analysis, det_analysis, combined_rule_eval
     return combined_rule_evals, overall_score, recommendation, summary
 
 def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
+    # Apply PII Masking BEFORE sending to API / processing engine
+    masked_cv_text = mask_pii_in_text(cv_text)
+
     jd_analysis = extract_jd_requirements(jd_text, groq_api_key)
-    profile_details = calculate_deterministic_timeline(cv_text, groq_api_key)
-    evidence_map = extract_universal_evidence(cv_text)
+    profile_details = calculate_deterministic_timeline(masked_cv_text, groq_api_key)
+    evidence_map = extract_universal_evidence(masked_cv_text)
 
     det_analysis = profile_details
 
@@ -682,7 +705,7 @@ def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
     total_rules = len(rules_list)
 
     for chunk in rule_chunks:
-        res = evaluate_batch_chunk(cv_text, jd_text, chunk, groq_api_key, det_analysis=det_analysis)
+        res = evaluate_batch_chunk(masked_cv_text, jd_text, chunk, groq_api_key, det_analysis=det_analysis)
         evals = res.get("Rule Evaluations", {})
         for r_name, r_data in evals.items():
             combined_rule_evals[r_name] = r_data
@@ -713,9 +736,11 @@ if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_con
     elif not cv_text or not jd_text:
         st.warning("Please provide both JD and Candidate Resume.")
     else:
-        with st.spinner("Running fully dynamic JD-CV-Rules guardrail matrix..."):
-            cv_name = cv_file.name if (cv_file and hasattr(cv_file, 'name')) else "Pasted CV Text"
+        with st.spinner("Running fully dynamic PII-protected evaluation matrix..."):
+            # Anonymize stored metadata
+            cv_name = "Anonymized_CV"
             jd_name = jd_file.name if (jd_file and hasattr(jd_file, 'name')) else "Pasted JD Text"
+            anonymized_candidate_name = f"Candidate_{abs(hash(candidate_name)) % 10000}"
 
             det_analysis, evidence_map, ai_results = evaluate_hybrid_system_batched(cv_text, jd_text, st.session_state.custom_rules, groq_api_key)
 
@@ -725,7 +750,7 @@ if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_con
             summary_text = ai_results.get("AI Contextual Summary", "")
 
             word_file_io = generate_in_memory_word_report(
-                candidate_name, evaluator_id, overall_score, rec, det_analysis, rule_evals, evidence_map
+                anonymized_candidate_name, evaluator_id, overall_score, rec, det_analysis, rule_evals, evidence_map
             )
 
             conn = sqlite3.connect(DB_PATH)
@@ -740,12 +765,12 @@ if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_con
             """, (
                 datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 evaluator_id,
-                candidate_name,
+                anonymized_candidate_name, # Storing anonymized name instead of real name
                 overall_score,
                 rec,
                 "Contextual Dynamic Guardrail Evaluation",
                 "",
-                cv_name,
+                cv_name,                    # Storing anonymized filename
                 jd_name,
                 json.dumps(st.session_state.custom_rules),
                 json.dumps(det_analysis),
@@ -758,7 +783,7 @@ if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_con
             conn.close()
 
             st.session_state.evaluation_results = {
-                "candidate_name": candidate_name,
+                "candidate_name": anonymized_candidate_name,
                 "overall_score": overall_score,
                 "recommendation": rec,
                 "det_analysis": det_analysis,
@@ -767,7 +792,7 @@ if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_con
                 "summary": summary_text,
                 "word_file_io": word_file_io
             }
-            st.success("Evaluation completed successfully!")
+            st.success("Evaluation completed with strict PII protection!")
 
 # ------------------------------------------------------------------------------
 # RENDER UI RESULTS FROM SESSION STATE
@@ -787,7 +812,7 @@ if st.session_state.evaluation_results is not None:
     st.download_button(
         label="📥 Download Evaluation Report (.docx)",
         data=word_file_io,
-        file_name=f"Candidate_Report_{candidate_name.replace(' ', '_')}.docx",
+        file_name=f"Candidate_Report_{candidate_name}.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         type="primary"
     )
@@ -833,7 +858,7 @@ if st.session_state.evaluation_results is not None:
     st.markdown(f"2. **Missing/Weak Areas to Probe:** {weak_areas}")
 
     ft_exp = format_time_gap(det_analysis.get('fulltime_experience_years', 0.0))
-    in_exp = format_time_gap(det_analysis.get('internship_experience_years', 0.0))
+    in_exp = format_time_gap(det_analysis.get('internship_security_years', 0.0) if 'internship_security_years' in det_analysis else det_analysis.get('internship_experience_years', 0.0))
     tot_exp = format_time_gap(det_analysis.get('total_experience_years', 0.0))
 
     st.markdown("---")
