@@ -27,23 +27,63 @@ MODEL_VERSION = "openai/gpt-oss-20b"
 LOGIC_VERSION = "v14.0-Balanced-Gap-Engine"
 
 # ------------------------------------------------------------------------------
-# PII ANONYMIZATION & MASKING ENGINE
+# COMPLETE PII ANONYMIZATION & MASKING ENGINE
 # ------------------------------------------------------------------------------
 def mask_pii_in_text(text: str) -> str:
-    """Masks names, emails, phone numbers, and common location keywords to protect personal info."""
+    """
+    Masks all personal identifiable information (PII) including:
+    - Emails
+    - Phone Numbers
+    - URLs & Social Profiles
+    - Candidate Names
+    - Addresses, Cities, Pincodes & Zipcodes
+    - Goverment Identifiers (PAN, Aadhaar, SSN)
+    - Date of Birth (DOB) / Age
+    - Demographics (Gender, Marital Status)
+    """
     if not text:
         return ""
     
-    # Mask Emails
+    # 1. Mask Emails
     text = re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '[REDACTED_EMAIL]', text)
     
-    # Mask Phone Numbers (various international and local formats)
+    # 2. Mask Phone Numbers (International formats, 10-digit local, mobile numbers)
     text = re.sub(r'(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', '[REDACTED_PHONE]', text)
+    text = re.sub(r'\b(?:\+91[-\s]?)?[6-9]\d{9}\b', '[REDACTED_PHONE]', text)
     text = re.sub(r'\b\d{10}\b', '[REDACTED_PHONE]', text)
     
-    # Mask URLs or LinkedIn/GitHub profile links
+    # 3. Mask URLs / Social / Portfolio / LinkedIn / GitHub Links
     text = re.sub(r'https?://(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)', '[REDACTED_URL]', text)
+    text = re.sub(r'\b(?:linkedin\.com|github\.com)/[a-zA-Z0-9_\-/]+', '[REDACTED_URL]', text, flags=re.IGNORECASE)
+
+    # 4. Mask Government IDs (PAN Card, Aadhaar, SSN)
+    text = re.sub(r'\b[A-Z]{5}\d{4}[A-Z]{1}\b', '[REDACTED_PAN_CARD]', text)  # Indian PAN
+    text = re.sub(r'\b\d{4}\s?\d{4}\s?\d{4}\b', '[REDACTED_AADHAAR]', text)  # Indian Aadhaar
+    text = re.sub(r'\b\d{3}-\d{2}-\d{4}\b', '[REDACTED_SSN]', text)            # US SSN
+
+    # 5. Mask Addresses, Cities, Locations & Postal Codes
+    # Pincode / Zip code (6-digit Indian Pincode or 5-digit US Zipcode)
+    text = re.sub(r'\b\d{6}\b', '[REDACTED_PINCODE]', text)
+    text = re.sub(r'\b\d{5}(?:-\d{4})?\b', '[REDACTED_ZIPCODE]', text)
     
+    # Explicit Address & Location Key-Value Pairs
+    text = re.sub(
+        r'\b(?:Address|Location|Residing at|Residential Address|Permanent Address|Current Address|Street|Road|Nagar|Marg|Sector|Plot|House No|Flat No|Apartment|Society|City|State|Pincode|Zip Code)\s*:\s*[^\n]+',
+        '[REDACTED_ADDRESS]',
+        text,
+        flags=re.IGNORECASE
+    )
+
+    # 6. Mask Candidate Names
+    # Header format: "Name: John Doe", "Candidate Name: Jane Doe", "Full Name: ..."
+    text = re.sub(r'\b(?:Candidate Name|Full Name|Name)\s*:\s*[A-Za-z\s.]+', '[REDACTED_NAME]', text, flags=re.IGNORECASE)
+    
+    # 7. Mask Date of Birth (DOB), Age & Personal Details
+    text = re.sub(r'\b(?:DOB|Date of Birth|Birth Date)\s*:\s*[^\n]+', '[REDACTED_DOB]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:Age)\s*:\s*\d{1,2}\s*(?:years|yrs)?', '[REDACTED_AGE]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:Gender|Sex)\s*:\s*(?:Male|Female|Other|M|F)', '[REDACTED_GENDER]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:Marital Status)\s*:\s*(?:Single|Married|Unmarried|Divorced)', '[REDACTED_MARITAL_STATUS]', text, flags=re.IGNORECASE)
+
     return text
 
 # ------------------------------------------------------------------------------
@@ -688,7 +728,7 @@ def apply_fully_dynamic_guardrails(jd_analysis, det_analysis, combined_rule_eval
     return combined_rule_evals, overall_score, recommendation, summary
 
 def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
-    # Apply PII Masking BEFORE sending to API / processing engine
+    # Apply Full PII Masking BEFORE sending to API / processing engine
     masked_cv_text = mask_pii_in_text(cv_text)
 
     jd_analysis = extract_jd_requirements(jd_text, groq_api_key)
