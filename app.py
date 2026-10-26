@@ -27,7 +27,7 @@ MODEL_VERSION = "openai/gpt-oss-20b"
 LOGIC_VERSION = "v14.0-Balanced-Gap-Engine"
 
 # ------------------------------------------------------------------------------
-# COMPLETE PII ANONYMIZATION & MASKING ENGINE
+# COMPLETE PII ANONYMIZATION & MASKING ENGINE (ROBUST)
 # ------------------------------------------------------------------------------
 def mask_pii_in_text(text: str) -> str:
     """
@@ -36,10 +36,9 @@ def mask_pii_in_text(text: str) -> str:
     - Phone Numbers
     - URLs & Social Profiles
     - Candidate Names
-    - Addresses, Cities, Pincodes & Zipcodes
-    - Goverment Identifiers (PAN, Aadhaar, SSN)
-    - Date of Birth (DOB) / Age
-    - Demographics (Gender, Marital Status)
+    - Addresses, Apartments, Cities, Pincodes & Zipcodes (with or without colons)
+    - Government Identifiers (PAN, Aadhaar, SSN)
+    - Date of Birth (DOB) / Age / Demographics
     """
     if not text:
         return ""
@@ -61,12 +60,11 @@ def mask_pii_in_text(text: str) -> str:
     text = re.sub(r'\b\d{4}\s?\d{4}\s?\d{4}\b', '[REDACTED_AADHAAR]', text)  # Indian Aadhaar
     text = re.sub(r'\b\d{3}-\d{2}-\d{4}\b', '[REDACTED_SSN]', text)            # US SSN
 
-    # 5. Mask Addresses, Cities, Locations & Postal Codes
-    # Pincode / Zip code (6-digit Indian Pincode or 5-digit US Zipcode)
+    # 5. Mask Pincodes & Zip Codes
     text = re.sub(r'\b\d{6}\b', '[REDACTED_PINCODE]', text)
     text = re.sub(r'\b\d{5}(?:-\d{4})?\b', '[REDACTED_ZIPCODE]', text)
     
-    # Explicit Address & Location Key-Value Pairs
+    # 6. Explicit Address Key-Value Pairs (with colon)
     text = re.sub(
         r'\b(?:Address|Location|Residing at|Residential Address|Permanent Address|Current Address|Street|Road|Nagar|Marg|Sector|Plot|House No|Flat No|Apartment|Society|City|State|Pincode|Zip Code)\s*:\s*[^\n]+',
         '[REDACTED_ADDRESS]',
@@ -74,11 +72,26 @@ def mask_pii_in_text(text: str) -> str:
         flags=re.IGNORECASE
     )
 
-    # 6. Mask Candidate Names
-    # Header format: "Name: John Doe", "Candidate Name: Jane Doe", "Full Name: ..."
+    # 7. Line-by-Line Standalone Address & Apartment Masking (Without colons)
+    lines = text.split('\n')
+    masked_lines = []
+    address_keywords = [
+        'flat no', 'flat #', 'apartment', 'society', 'residency', 'layout', 
+        'block no', 'plot no', 'house no', 'door no', 'street no', 
+        'near opp', 'cross street', 'extension nagar'
+    ]
+    for line in lines:
+        line_lower = line.lower()
+        if any(kw in line_lower for kw in address_keywords):
+            masked_lines.append('[REDACTED_ADDRESS]')
+        else:
+            masked_lines.append(line)
+    text = '\n'.join(masked_lines)
+
+    # 8. Mask Candidate Names
     text = re.sub(r'\b(?:Candidate Name|Full Name|Name)\s*:\s*[A-Za-z\s.]+', '[REDACTED_NAME]', text, flags=re.IGNORECASE)
     
-    # 7. Mask Date of Birth (DOB), Age & Personal Details
+    # 9. Mask Date of Birth (DOB), Age & Demographics
     text = re.sub(r'\b(?:DOB|Date of Birth|Birth Date)\s*:\s*[^\n]+', '[REDACTED_DOB]', text, flags=re.IGNORECASE)
     text = re.sub(r'\b(?:Age)\s*:\s*\d{1,2}\s*(?:years|yrs)?', '[REDACTED_AGE]', text, flags=re.IGNORECASE)
     text = re.sub(r'\b(?:Gender|Sex)\s*:\s*(?:Male|Female|Other|M|F)', '[REDACTED_GENDER]', text, flags=re.IGNORECASE)
