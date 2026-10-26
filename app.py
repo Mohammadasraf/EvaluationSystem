@@ -27,18 +27,17 @@ MODEL_VERSION = "openai/gpt-oss-20b"
 LOGIC_VERSION = "v14.0-Balanced-Gap-Engine"
 
 # ------------------------------------------------------------------------------
-# COMPLETE PII ANONYMIZATION & MASKING ENGINE (WITH CITY, STATE & ADDRESS)
+# COMPLETE PII ANONYMIZATION & MASKING ENGINE (UNIFIED ADDRESS TAG)
 # ------------------------------------------------------------------------------
 def mask_pii_in_text(text: str) -> str:
     """
-    Masks all personal identifiable information (PII) including:
-    - Emails
-    - Phone Numbers (and cleans duplicate adjacent phone tags)
-    - URLs & Social Profiles
-    - Candidate Names
-    - Addresses, Apartments, Societies, Cities, States, Pincodes & Zipcodes
-    - Government Identifiers (PAN, Aadhaar, SSN)
-    - Date of Birth (DOB) / Age / Demographics
+    Masks all personal identifiable information (PII) into unified tags:
+    - Emails -> [REDACTED_EMAIL]
+    - Phone Numbers -> [REDACTED_PHONE]
+    - URLs -> [REDACTED_URL]
+    - Government IDs -> [REDACTED_PAN_CARD] / [REDACTED_AADHAAR] / [REDACTED_SSN]
+    - Address, City, State, Pincodes, Zipcodes, Landmarks -> [REDACTED_ADDRESS]
+    - Name, DOB, Demographics -> [REDACTED_NAME], [REDACTED_DOB], etc.
     """
     if not text:
         return ""
@@ -46,28 +45,26 @@ def mask_pii_in_text(text: str) -> str:
     # 1. Mask Emails
     text = re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '[REDACTED_EMAIL]', text)
     
-    # 2. Mask Phone Numbers (International formats, 10-digit local, mobile numbers)
+    # 2. Mask Phone Numbers
     text = re.sub(r'(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', '[REDACTED_PHONE]', text)
     text = re.sub(r'\b(?:\+91[-\s]?)?[6-9]\d{9}\b', '[REDACTED_PHONE]', text)
     text = re.sub(r'\b\d{10}\b', '[REDACTED_PHONE]', text)
-    
-    # Clean up duplicate adjacent redacted phone tags
     text = re.sub(r'\[REDACTED_PHONE\](?:\s*[\/\-,]\s*\[REDACTED_PHONE\])+', '[REDACTED_PHONE]', text)
     
-    # 3. Mask URLs / Social / Portfolio / LinkedIn / GitHub Links
+    # 3. Mask URLs
     text = re.sub(r'https?://(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)', '[REDACTED_URL]', text)
     text = re.sub(r'\b(?:linkedin\.com|github\.com)/[a-zA-Z0-9_\-/]+', '[REDACTED_URL]', text, flags=re.IGNORECASE)
 
-    # 4. Mask Government IDs (PAN Card, Aadhaar, SSN)
-    text = re.sub(r'\b[A-Z]{5}\d{4}[A-Z]{1}\b', '[REDACTED_PAN_CARD]', text)  # Indian PAN
-    text = re.sub(r'\b\d{4}\s?\d{4}\s?\d{4}\b', '[REDACTED_AADHAAR]', text)  # Indian Aadhaar
-    text = re.sub(r'\b\d{3}-\d{2}-\d{4}\b', '[REDACTED_SSN]', text)            # US SSN
+    # 4. Mask Government IDs
+    text = re.sub(r'\b[A-Z]{5}\d{4}[A-Z]{1}\b', '[REDACTED_PAN_CARD]', text)
+    text = re.sub(r'\b\d{4}\s?\d{4}\s?\d{4}\b', '[REDACTED_AADHAAR]', text)
+    text = re.sub(r'\b\d{3}-\d{2}-\d{4}\b', '[REDACTED_SSN]', text)
 
-    # 5. Mask Pincodes & Zip Codes
-    text = re.sub(r'\b\d{6}\b', '[REDACTED_PINCODE]', text)
-    text = re.sub(r'\b\d{5}(?:-\d{4})?\b', '[REDACTED_ZIPCODE]', text)
+    # 5. Mask Pincodes & Zip Codes as [REDACTED_ADDRESS]
+    text = re.sub(r'\b\d{6}\b', '[REDACTED_ADDRESS]', text)
+    text = re.sub(r'\b\d{5}(?:-\d{4})?\b', '[REDACTED_ADDRESS]', text)
 
-    # 6. Mask Common Indian & Global States
+    # 6. Mask States as [REDACTED_ADDRESS]
     states_list = [
         'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 
         'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 
@@ -76,9 +73,9 @@ def mask_pii_in_text(text: str) -> str:
         'Uttar Pradesh', 'Uttarakhand', 'West Bengal', 'Delhi', 'Chandigarh', 'California', 'New York'
     ]
     for state in states_list:
-        text = re.sub(rf'\b{state}\b', '[REDACTED_STATE]', text, flags=re.IGNORECASE)
+        text = re.sub(rf'\b{state}\b', '[REDACTED_ADDRESS]', text, flags=re.IGNORECASE)
 
-    # 7. Mask Common Major Cities
+    # 7. Mask Cities as [REDACTED_ADDRESS]
     cities_list = [
         'Bengaluru', 'Bangalore', 'Mumbai', 'Delhi', 'Hyderabad', 'Ahmedabad', 'Chennai', 
         'Kolkata', 'Pune', 'Surat', 'Jaipur', 'Lucknow', 'Kanpur', 'Nagpur', 'Indore', 
@@ -87,9 +84,9 @@ def mask_pii_in_text(text: str) -> str:
         'New York', 'San Francisco', 'London', 'Singapore', 'Dubai'
     ]
     for city in cities_list:
-        text = re.sub(rf'\b{city}\b', '[REDACTED_CITY]', text, flags=re.IGNORECASE)
+        text = re.sub(rf'\b{city}\b', '[REDACTED_ADDRESS]', text, flags=re.IGNORECASE)
     
-    # 8. Explicit Address Key-Value Pairs (with colon)
+    # 8. Explicit Address Key-Value Pairs
     text = re.sub(
         r'\b(?:Address|Location|Residing at|Residential Address|Permanent Address|Current Address|Street|Road|Nagar|Marg|Sector|Plot|House No|Flat No|Apartment|Society|City|State|Pincode|Zip Code)\s*:\s*[^\n]+',
         '[REDACTED_ADDRESS]',
@@ -97,14 +94,15 @@ def mask_pii_in_text(text: str) -> str:
         flags=re.IGNORECASE
     )
 
-    # 9. Enhanced Line-by-Line Address & Apartment Masking (Without colons)
+    # 9. Line-by-Line Address, Apartment, Cross & Landmark Masking
     lines = text.split('\n')
     masked_lines = []
     address_keywords = [
         'flat no', 'flat #', 'apartment', 'society', 'residency', 'layout', 
         'block no', 'plot no', 'house no', 'door no', 'street no', 
         'near opp', 'cross street', 'extension nagar', 'greenfield', 
-        'enclave', 'towers', 'heights', 'villa', 'colony', 'phase'
+        'enclave', 'towers', 'heights', 'villa', 'colony', 'phase',
+        'cross', 'junction', 'circle', 'bypass', 'byepass', 'chowk', 'square', 'main road'
     ]
     for line in lines:
         line_lower = line.lower()
@@ -113,6 +111,9 @@ def mask_pii_in_text(text: str) -> str:
         else:
             masked_lines.append(line)
     text = '\n'.join(masked_lines)
+
+    # Clean up duplicate adjacent redacted address tags
+    text = re.sub(r'(\[REDACTED_ADDRESS\]\s*[\/\-,]?\s*)+', '[REDACTED_ADDRESS] ', text)
 
     # 10. Mask Candidate Names
     text = re.sub(r'\b(?:Candidate Name|Full Name|Name)\s*:\s*[A-Za-z\s.]+', '[REDACTED_NAME]', text, flags=re.IGNORECASE)
