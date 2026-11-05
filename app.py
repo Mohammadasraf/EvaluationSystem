@@ -24,7 +24,78 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v14.0-Balanced-Gap-Engine"
+LOGIC_VERSION = "v15.0-Universal-Multilingual-Engine"
+
+# ------------------------------------------------------------------------------
+# UNIVERSAL LANGUAGE DETECTION & TRANSLATION ENGINE
+# ------------------------------------------------------------------------------
+def detect_and_translate_to_english(text: str, groq_api_key: str) -> tuple[str, str]:
+    """
+    Detects the input text language and translates non-English text into English.
+    Returns a tuple of (translated_text, detected_language).
+    """
+    if not text or not text.strip():
+        return "", "English"
+
+    if not groq_api_key:
+        return text, "Unknown (No API Key)"
+
+    system_prompt = (
+        "You are an expert multilingual document translator and language detector. "
+        "Analyze the input text. Detect its primary language. "
+        "If the text is NOT in English, translate it accurately to professional English, maintaining all numbers, dates, technical skills, job titles, and formatting context. "
+        "If the text is already in English, return it unchanged. "
+        "Return ONLY valid JSON matching this schema: {\"detected_language\": \"Spanish\", \"translated_text\": \"...\"}"
+    )
+
+    sample_text = text[:3000]
+
+    user_prompt = f"""Analyze and translate the following document text if it is not in English:
+
+--- DOCUMENT TEXT ---
+{sample_text}
+
+Return JSON strictly:
+{{
+  "detected_language": "Language Name (e.g., Spanish, French, German, English)",
+  "translated_text": "Full English translated text..."
+}}
+"""
+    try:
+        client = Groq(api_key=groq_api_key.strip())
+        completion = client.chat.completions.create(
+            model=MODEL_VERSION,
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+            temperature=0.0,
+            max_tokens=2500
+        )
+        content = completion.choices[0].message.content.strip()
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+
+        parsed = json.loads(repair_json(content))
+        detected_lang = parsed.get("detected_language", "English")
+        
+        if len(text) <= 3000:
+            translated_text = parsed.get("translated_text", text)
+        else:
+            if "english" not in detected_lang.lower():
+                full_prompt = f"Translate the following {detected_lang} document to English. Output ONLY the translated text without extra commentary:\n\n{text}"
+                full_completion = client.chat.completions.create(
+                    model=MODEL_VERSION,
+                    messages=[{"role": "system", "content": "You are a professional translator. Translate text accurately to English."}, {"role": "user", "content": full_prompt}],
+                    temperature=0.0,
+                    max_tokens=4000
+                )
+                translated_text = full_completion.choices[0].message.content.strip()
+            else:
+                translated_text = text
+
+        return translated_text, detected_lang
+    except Exception:
+        return text, "English (Fallback)"
 
 # ------------------------------------------------------------------------------
 # COMPLETE PII ANONYMIZATION & MASKING ENGINE (UNIFIED ADDRESS TAG)
@@ -70,7 +141,8 @@ def mask_pii_in_text(text: str) -> str:
         'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 
         'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 
         'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 
-        'Uttar Pradesh', 'Uttarakhand', 'West Bengal', 'Delhi', 'Chandigarh', 'California', 'New York'
+        'Uttar Pradesh', 'Uttarakhand', 'West Bengal', 'Delhi', 'Chandigarh', 'California', 'New York',
+        'Madrid', 'Catalonia', 'Bavaria', 'Ontario', 'Quebec', 'Ile-de-France'
     ]
     for state in states_list:
         text = re.sub(rf'\b{state}\b', '[REDACTED_ADDRESS]', text, flags=re.IGNORECASE)
@@ -81,14 +153,15 @@ def mask_pii_in_text(text: str) -> str:
         'Kolkata', 'Pune', 'Surat', 'Jaipur', 'Lucknow', 'Kanpur', 'Nagpur', 'Indore', 
         'Thane', 'Bhopal', 'Visakhapatnam', 'Patna', 'Vadodara', 'Ghaziabad', 'Ludhiana', 
         'Agra', 'Nashik', 'Faridabad', 'Meerut', 'Rajkot', 'Kalyan', 'Vasai', 'Varanasi',
-        'New York', 'San Francisco', 'London', 'Singapore', 'Dubai'
+        'New York', 'San Francisco', 'London', 'Singapore', 'Dubai', 'Barcelona', 'Madrid',
+        'Paris', 'Berlin', 'Munich', 'Tokyo', 'Toronto', 'Mexico City', 'Bogota', 'Buenos Aires'
     ]
     for city in cities_list:
         text = re.sub(rf'\b{city}\b', '[REDACTED_ADDRESS]', text, flags=re.IGNORECASE)
     
     # 8. Explicit Address Key-Value Pairs
     text = re.sub(
-        r'\b(?:Address|Location|Residing at|Residential Address|Permanent Address|Current Address|Street|Road|Nagar|Marg|Sector|Plot|House No|Flat No|Apartment|Society|City|State|Pincode|Zip Code)\s*:\s*[^\n]+',
+        r'\b(?:Address|Location|Residing at|Residential Address|Permanent Address|Current Address|Street|Road|Nagar|Marg|Sector|Plot|House No|Flat No|Apartment|Society|City|State|Pincode|Zip Code|Dirección|Ubicación|Domicilio)\s*:\s*[^\n]+',
         '[REDACTED_ADDRESS]',
         text,
         flags=re.IGNORECASE
@@ -102,7 +175,8 @@ def mask_pii_in_text(text: str) -> str:
         'block no', 'plot no', 'house no', 'door no', 'street no', 
         'near opp', 'cross street', 'extension nagar', 'greenfield', 
         'enclave', 'towers', 'heights', 'villa', 'colony', 'phase',
-        'cross', 'junction', 'circle', 'bypass', 'byepass', 'chowk', 'square', 'main road'
+        'cross', 'junction', 'circle', 'bypass', 'byepass', 'chowk', 'square', 'main road',
+        'calle', 'avenida', 'carrera', 'barrio', 'colonia', 'piso', 'departamento', 'codigo postal'
     ]
     for line in lines:
         line_lower = line.lower()
@@ -113,16 +187,16 @@ def mask_pii_in_text(text: str) -> str:
     text = '\n'.join(masked_lines)
 
     # Clean up duplicate adjacent redacted address tags
-    text = re.sub(r'(\[REDACTED_ADDRESS\]\s*[\/\-,]?\s*)+', '[REDACTED_ADDRESS] ', text)
+    text = re.sub(r'(\[REDACTED_ADDRESS\]\s*[\/\-,]\s*)+', '[REDACTED_ADDRESS] ', text)
 
     # 10. Mask Candidate Names
-    text = re.sub(r'\b(?:Candidate Name|Full Name|Name)\s*:\s*[A-Za-z\s.]+', '[REDACTED_NAME]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:Candidate Name|Full Name|Name|Nombre|Nombre Completo)\s*:\s*[A-Za-z\s.]+', '[REDACTED_NAME]', text, flags=re.IGNORECASE)
     
     # 11. Mask Date of Birth (DOB), Age & Demographics
-    text = re.sub(r'\b(?:DOB|Date of Birth|Birth Date)\s*:\s*[^\n]+', '[REDACTED_DOB]', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(?:Age)\s*:\s*\d{1,2}\s*(?:years|yrs)?', '[REDACTED_AGE]', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(?:Gender|Sex)\s*:\s*(?:Male|Female|Other|M|F)', '[REDACTED_GENDER]', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(?:Marital Status)\s*:\s*(?:Single|Married|Unmarried|Divorced)', '[REDACTED_MARITAL_STATUS]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:DOB|Date of Birth|Birth Date|Fecha de Nacimiento)\s*:\s*[^\n]+', '[REDACTED_DOB]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:Age|Edad)\s*:\s*\d{1,2}\s*(?:years|yrs|años)?', '[REDACTED_AGE]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:Gender|Sex|Género|Sexo)\s*:\s*(?:Male|Female|Other|M|F|Masculino|Femenino)', '[REDACTED_GENDER]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:Marital Status|Estado Civil)\s*:\s*(?:Single|Married|Unmarried|Divorced|Soltero|Casado|Divorciado)', '[REDACTED_MARITAL_STATUS]', text, flags=re.IGNORECASE)
 
     return text
 
@@ -195,7 +269,7 @@ def parse_date_str(date_str):
     
     date_str = str(date_str).replace("'", "").replace("`", "").strip().lower()
     
-    if any(kw in date_str for kw in ["present", "current", "till date", "continuing", "now", "today"]):
+    if any(kw in date_str for kw in ["present", "current", "till date", "continuing", "now", "today", "actualidad", "presente", "hasta la fecha"]):
         return datetime.datetime.now()
     
     match = re.search(r'([a-z]+)\.?\s*[\'`]?(\d{2,4})', date_str)
@@ -207,8 +281,11 @@ def parse_date_str(date_str):
             month = 0
             month_lower = month_str[:3]
             months_list = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+            es_months = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
             if month_lower in months_list:
                 month = months_list.index(month_lower) + 1
+            elif month_lower in es_months:
+                month = es_months.index(month_lower) + 1
             if month > 0:
                 return datetime.datetime(int(year_str), month, 1)
         except ValueError:
@@ -237,7 +314,8 @@ def extract_experience_via_regex(text: str) -> float:
     patterns = [
         r'(\d+(?:\.\d+)?)\+?\s*years?\s*(?:of)?\s*experience',
         r'experience\s*(?:of)?\s*(\d+(?:\.\d+)?)\+?\s*years?',
-        r'(\d+(?:\.\d+)?)\+?\s*yrs?'
+        r'(\d+(?:\.\d+)?)\+?\s*yrs?',
+        r'(\d+(?:\.\d+)?)\+?\s*años?\s*(?:de)?\s*experiencia'
     ]
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
@@ -302,10 +380,10 @@ RESUME TEXT:
         lines = cleaned_cv.split('\n')
         for line_idx, line in enumerate(lines):
             line_lower = line.lower()
-            if any(kw in line_lower for kw in ['b.tech', 'b.e', 'm.tech', 'b.sc', 'm.sc', 'bca', 'mca', 'mba', 'graduation', 'degree', 'cgpa', 'college', 'university', 'school', 'education', 'hsc', 'ssc', 'diploma']):
+            if any(kw in line_lower for kw in ['b.tech', 'b.e', 'm.tech', 'b.sc', 'm.sc', 'bca', 'mca', 'mba', 'graduation', 'degree', 'cgpa', 'college', 'university', 'school', 'education', 'hsc', 'ssc', 'diploma', 'licenciatura', 'ingenieria', 'universidad']):
                 continue
 
-            parts = re.split(r'\s*(?:–|-|to)\s*', line, flags=re.IGNORECASE)
+            parts = re.split(r'\s*(?:–|-|to|a)\s*', line, flags=re.IGNORECASE)
             if len(parts) >= 2:
                 for i in range(len(parts) - 1):
                     start_dt = parse_date_str(parts[i])
@@ -314,7 +392,7 @@ RESUME TEXT:
                         months = (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
                         if 0 < months <= 600:
                             context_block = " ".join(lines[max(0, line_idx - 2): line_idx + 1]).lower()
-                            if any(kw in context_block for kw in ["intern", "trainee", "internship", "apprentic"]):
+                            if any(kw in context_block for kw in ["intern", "trainee", "internship", "apprentic", "pasante", "practicante"]):
                                 work_periods.append((start_dt, end_dt, "internship"))
                             else:
                                 work_periods.append((start_dt, end_dt, "fulltime"))
@@ -363,9 +441,11 @@ RESUME TEXT:
 
     edu_end_date = None
     edu_pos = cleaned_cv.lower().find('education')
+    if edu_pos == -1:
+        edu_pos = cleaned_cv.lower().find('educación')
     if edu_pos != -1:
         edu_subtext = cleaned_cv[edu_pos:edu_pos + 600]
-        sub_ranges = re.findall(r'([A-Za-z0-9\/\-\.\s]{3,12})\s*(?:–|-|to)+\s*([A-Za-z0-9\/\-\.\s]{3,12})', edu_subtext, re.IGNORECASE)
+        sub_ranges = re.findall(r'([A-Za-z0-9\/\-\.\s]{3,12})\s*(?:–|-|to|a)+\s*([A-Za-z0-9\/\-\.\s]{3,12})', edu_subtext, re.IGNORECASE)
         if sub_ranges:
             edu_end_date = parse_date_str(sub_ranges[0][1])
 
@@ -517,7 +597,7 @@ def generate_in_memory_word_report(candidate_name, recruiter_id, overall_score, 
 st.set_page_config(page_title="Universal Enterprise Candidate Evaluator", layout="wide")
 
 st.title("⚡ Universal Enterprise Candidate Evaluation System")
-st.caption("Dynamic Math Engine + AI Precision + Contextual Gap Guardrails (PII Protected)")
+st.caption("Multilingual Auto-Translation Engine + Domain Competency + Contextual Gap Guardrails (PII Protected)")
 
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = [
@@ -558,7 +638,7 @@ with st.sidebar:
     else:
         st.success("✅ Groq API Key loaded securely from Secrets")
         
-    st.info(f"Model: {MODEL_VERSION}\nLogic: {LOGIC_VERSION}\nStorage: In-Memory / Browser Only")
+    st.info(f"Model: {MODEL_VERSION}\nLogic: {LOGIC_VERSION}\nMultilingual: All Languages Auto-Translate")
 
 # Section 1: Inputs
 st.markdown("### 1. Inputs (Job Description & Candidate Resume)")
@@ -722,7 +802,6 @@ def apply_fully_dynamic_guardrails(jd_analysis, det_analysis, combined_rule_eval
     
     has_real_gaps = any("Gap of" in gap for gap in exp_gaps)
 
-    # Contextual override for Career Stability
     for r_name in combined_rule_evals:
         if "career stability" in r_name.lower() or "stability" in r_name.lower():
             if has_real_gaps:
@@ -768,13 +847,19 @@ def apply_fully_dynamic_guardrails(jd_analysis, det_analysis, combined_rule_eval
     return combined_rule_evals, overall_score, recommendation, summary
 
 def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
-    # Apply Full PII Masking BEFORE sending to API / processing engine
-    masked_cv_text = mask_pii_in_text(cv_text)
+    # STEP 1: Universal Auto-Translation for Multilingual Resumes & JDs
+    translated_cv, detected_cv_lang = detect_and_translate_to_english(cv_text, groq_api_key)
+    translated_jd, detected_jd_lang = detect_and_translate_to_english(jd_text, groq_api_key)
 
-    jd_analysis = extract_jd_requirements(jd_text, groq_api_key)
+    # STEP 2: Apply Full PII Masking
+    masked_cv_text = mask_pii_in_text(translated_cv)
+
+    jd_analysis = extract_jd_requirements(translated_jd, groq_api_key)
     profile_details = calculate_deterministic_timeline(masked_cv_text, groq_api_key)
-    evidence_map = extract_universal_evidence(masked_cv_text)
+    profile_details["detected_cv_language"] = detected_cv_lang
+    profile_details["detected_jd_language"] = detected_jd_lang
 
+    evidence_map = extract_universal_evidence(masked_cv_text)
     det_analysis = profile_details
 
     chunk_size = 4
@@ -785,7 +870,7 @@ def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
     total_rules = len(rules_list)
 
     for chunk in rule_chunks:
-        res = evaluate_batch_chunk(masked_cv_text, jd_text, chunk, groq_api_key, det_analysis=det_analysis)
+        res = evaluate_batch_chunk(masked_cv_text, translated_jd, chunk, groq_api_key, det_analysis=det_analysis)
         evals = res.get("Rule Evaluations", {})
         for r_name, r_data in evals.items():
             combined_rule_evals[r_name] = r_data
@@ -816,8 +901,7 @@ if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_con
     elif not cv_text or not jd_text:
         st.warning("Please provide both JD and Candidate Resume.")
     else:
-        with st.spinner("Running fully dynamic PII-protected evaluation matrix..."):
-            # Anonymize stored metadata
+        with st.spinner("Running multilingual auto-translation & PII-protected evaluation matrix..."):
             cv_name = "Anonymized_CV"
             jd_name = jd_file.name if (jd_file and hasattr(jd_file, 'name')) else "Pasted JD Text"
             anonymized_candidate_name = f"Candidate_{abs(hash(candidate_name)) % 10000}"
@@ -845,12 +929,12 @@ if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_con
             """, (
                 datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 evaluator_id,
-                anonymized_candidate_name, # Storing anonymized name instead of real name
+                anonymized_candidate_name,
                 overall_score,
                 rec,
                 "Contextual Dynamic Guardrail Evaluation",
                 "",
-                cv_name,                    # Storing anonymized filename
+                cv_name,
                 jd_name,
                 json.dumps(st.session_state.custom_rules),
                 json.dumps(det_analysis),
@@ -872,7 +956,7 @@ if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_con
                 "summary": summary_text,
                 "word_file_io": word_file_io
             }
-            st.success("Evaluation completed with strict PII protection!")
+            st.success("Evaluation completed with strict PII protection & Multilingual Auto-Translation!")
 
 # ------------------------------------------------------------------------------
 # RENDER UI RESULTS FROM SESSION STATE
@@ -910,6 +994,9 @@ if st.session_state.evaluation_results is not None:
     exp_gaps_list = det_analysis.get("experience_gaps", [])
     has_gaps = any("Gap of" in gap for gap in exp_gaps_list)
 
+    cv_lang = det_analysis.get("detected_cv_language", "English")
+    jd_lang = det_analysis.get("detected_jd_language", "English")
+
     if overall_score >= 80 and not has_gaps:
         conclusion_html = "✅ High Potential / Ready for Interview"
         next_step_msg = "Strong alignment with core JD requirements. Recommend scheduling an initial technical interview."
@@ -926,6 +1013,7 @@ if st.session_state.evaluation_results is not None:
 
     st.info(
         f"**Conclusion Status:** {conclusion_html}\n\n"
+        f"**Detected CV Language:** {cv_lang} | **Detected JD Language:** {jd_lang}\n\n"
         f"**Overall Score:** {overall_score}/100 | **Total Experience:** {tot_exp_formatted} | **Education-to-Job Gap:** {edu_gap_formatted}\n\n"
         f"**Summary:** {summary_text}"
     )
@@ -938,7 +1026,7 @@ if st.session_state.evaluation_results is not None:
     st.markdown(f"2. **Missing/Weak Areas to Probe:** {weak_areas}")
 
     ft_exp = format_time_gap(det_analysis.get('fulltime_experience_years', 0.0))
-    in_exp = format_time_gap(det_analysis.get('internship_security_years', 0.0) if 'internship_security_years' in det_analysis else det_analysis.get('internship_experience_years', 0.0))
+    in_exp = format_time_gap(det_analysis.get('internship_experience_years', 0.0))
     tot_exp = format_time_gap(det_analysis.get('total_experience_years', 0.0))
 
     st.markdown("---")
