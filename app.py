@@ -844,7 +844,8 @@ def apply_fully_dynamic_guardrails(jd_analysis, det_analysis, combined_rule_eval
         overall_score = min(overall_score, 40.0)
         summary = "Candidate score fell below viable threshold."
 
-if recommendation == "Reject":
+    # Overall Profile Fit override when rejected
+    if recommendation == "Reject":
         for r_name in combined_rule_evals:
             if "overall profile fit" in r_name.lower() or "overall fit" in r_name.lower():
                 combined_rule_evals[r_name] = {
@@ -854,6 +855,7 @@ if recommendation == "Reject":
                 }
 
     return combined_rule_evals, overall_score, recommendation, summary
+
 
 def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
     # STEP 1: Universal Auto-Translation for Multilingual Resumes & JDs
