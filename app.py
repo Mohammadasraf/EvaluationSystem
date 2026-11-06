@@ -717,7 +717,7 @@ with is_expanded:
             st.warning("Please fill both Rule Name and Criteria.")
 
 st.markdown("#### Current Evaluation Rules")
-rules_to_keep = []
+updated_rules = []
 for idx, rule in enumerate(st.session_state.custom_rules):
     c1, c2, c3, c4 = st.columns([1, 4, 1, 1])
     c1.markdown(f"**Rule {idx+1}**")
@@ -727,12 +727,14 @@ for idx, rule in enumerate(st.session_state.custom_rules):
         st.session_state.editing_rule_id = rule['id']
         st.rerun()
         
-    if c4.button("❌", key=f"del_{rule['id']}"):
+    delete_clicked = c4.button("❌", key=f"del_{rule['id']}")
+    if delete_clicked:
         if st.session_state.editing_rule_id == rule['id']:
             st.session_state.editing_rule_id = None
-        st.rerun()
         continue
         
+    updated_rules.append(rule)
+
     if st.session_state.editing_rule_id == rule['id']:
         with st.container():
             st.markdown(f"--- \n **✏️ Editing Rule #{idx+1} ({rule['name']})**")
@@ -753,8 +755,9 @@ for idx, rule in enumerate(st.session_state.custom_rules):
                 st.rerun()
             st.markdown("---")
 
-    rules_to_keep.append(rule)
-st.session_state.custom_rules = rules_to_keep
+if len(updated_rules) != len(st.session_state.custom_rules):
+    st.session_state.custom_rules = updated_rules
+    st.rerun()
 
 st.markdown("---")
 
@@ -865,7 +868,6 @@ def apply_fully_dynamic_guardrails(jd_analysis, det_analysis, combined_rule_eval
         overall_score = min(overall_score, 40.0)
         summary = "Candidate score fell below viable threshold."
 
-    # Overall Profile Fit override when rejected
     if recommendation == "Reject":
         for r_name in combined_rule_evals:
             if "overall profile fit" in r_name.lower() or "overall fit" in r_name.lower():
@@ -879,11 +881,9 @@ def apply_fully_dynamic_guardrails(jd_analysis, det_analysis, combined_rule_eval
 
 
 def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
-    # STEP 1: Universal Auto-Translation for Multilingual Resumes & JDs
     translated_cv, detected_cv_lang = detect_and_translate_to_english(cv_text, groq_api_key)
     translated_jd, detected_jd_lang = detect_and_translate_to_english(jd_text, groq_api_key)
 
-    # STEP 2: Apply Full PII Masking
     masked_cv_text = mask_pii_in_text(translated_cv)
 
     jd_analysis = extract_jd_requirements(translated_jd, groq_api_key)
@@ -989,7 +989,6 @@ if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_con
                 "word_file_io": word_file_io
             }
             
-            # Increment form reset counter to clear file uploaders & text inputs instantly
             st.session_state.form_reset_counter += 1
             
             st.success("Evaluation completed! Attached files and text inputs have been cleared successfully.")
