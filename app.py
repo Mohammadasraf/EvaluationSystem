@@ -85,7 +85,7 @@ Return JSON strictly:
                 full_prompt = f"Translate the following {detected_lang} document to English. Output ONLY the translated text without extra commentary:\n\n{text}"
                 full_completion = client.chat.completions.create(
                     model=MODEL_VERSION,
-                    messages=[{"role": "system", "content": "You are a professional translator. Translate text accurately to English."}],
+                    messages=[{"role": "system", "content": "You are a professional translator. Translate text accurately to English."}, {"role": "user", "content": full_prompt}],
                     temperature=0.0,
                     max_tokens=4000
                 )
@@ -186,6 +186,7 @@ def mask_pii_in_text(text: str) -> str:
             masked_lines.append(line)
     text = '\n'.join(masked_lines)
 
+    # Clean up duplicate adjacent redacted address tags
     text = re.sub(r'(\[REDACTED_ADDRESS\]\s*[\/\-,]\s*)+', '[REDACTED_ADDRESS] ', text)
 
     # 10. Mask Candidate Names
@@ -613,7 +614,7 @@ if "editing_rule_id" not in st.session_state:
 if "evaluation_results" not in st.session_state:
     st.session_state.evaluation_results = None
 
-# Initialize unique widget keys & states for clearing inputs post-evaluation
+# Initialize unique widget keys for clearing inputs post-evaluation
 if "form_reset_counter" not in st.session_state:
     st.session_state.form_reset_counter = 0
 
@@ -678,65 +679,27 @@ with col_cv:
 
 st.markdown("---")
 
-# Section 2: Rules Builder & Editor (State-based Container for Seamless Collapse & Clear)
+# Section 2: Rules Builder & Editor
 st.markdown("### 2. 🎛 N-Rules Builder & Editor")
-
-if "show_add_rule_form" not in st.session_state:
-    st.session_state.show_add_rule_form = False
-
-if "rule_add_counter" not in st.session_state:
-    st.session_state.rule_add_counter = 0
-
-# Header bar with dynamic open/close action button
-col_t1, col_t2 = st.columns([4, 1])
-with col_t1:
-    st.markdown("Manage and customize evaluation rules dynamically.")
-with col_t2:
-    if not st.session_state.show_add_rule_form:
-        if st.button("➕ Add Rule", key="btn_toggle_open"):
-            st.session_state.show_add_rule_form = True
+with st.expander("➕ Add New Evaluation Rule", expanded=False):
+    new_name = st.text_input("Rule Name", key="new_r_name")
+    new_type = st.selectbox("Rule Type", ["Deterministic", "Skill Check", "Compliance", "Custom"], key="new_r_type")
+    new_criteria = st.text_area("Rule Description / Criteria", key="new_r_crit")
+    
+    if st.button("Add Rule"):
+        if new_name and new_criteria:
+            max_id = max([r['id'] for r in st.session_state.custom_rules]) if st.session_state.custom_rules else 0
+            st.session_state.custom_rules.append({
+                "id": max_id + 1,
+                "name": new_name,
+                "type": new_type,
+                "criteria": new_criteria
+            })
+            st.success("Rule added successfully!")
             st.rerun()
-    else:
-        if st.button("❌ Close Form", key="btn_toggle_close"):
-            st.session_state.show_add_rule_form = False
-            st.rerun()
+        else:
+            st.warning("Please fill both Rule Name and Criteria.")
 
-r_counter = st.session_state.rule_add_counter
-
-# Render rule creation form inside a container when active
-if st.session_state.show_add_rule_form:
-    with st.container(border=True):
-        st.markdown("#### ➕ Add New Evaluation Rule")
-        new_name = st.text_input("Rule Name", key=f"new_r_name_{r_counter}")
-        new_type = st.selectbox("Rule Type", ["Deterministic", "Skill Check", "Compliance", "Custom"], key=f"new_r_type_{r_counter}")
-        new_criteria = st.text_area("Rule Description / Criteria", key=f"new_r_crit_{r_counter}")
-        
-        col_b1, col_b2 = st.columns(2)
-        with col_b1:
-            if st.button("Save & Add Rule", key="btn_add_rule_submit", type="primary"):
-                if new_name and new_criteria:
-                    max_id = max([r['id'] for r in st.session_state.custom_rules]) if st.session_state.custom_rules else 0
-                    st.session_state.custom_rules.append({
-                        "id": max_id + 1,
-                        "name": new_name,
-                        "type": new_type,
-                        "criteria": new_criteria
-                    })
-                    # Clear inputs & collapse form window
-                    st.session_state.rule_add_counter += 1
-                    st.session_state.show_add_rule_form = False
-                    
-                    st.success("Rule added successfully!")
-                    st.rerun()
-                else:
-                    st.warning("Please fill both Rule Name and Criteria.")
-                    
-        with col_b2:
-            if st.button("Cancel", key="btn_cancel_rule"):
-                st.session_state.show_add_rule_form = False
-                st.rerun()
-
-st.markdown("---")
 st.markdown("#### Current Evaluation Rules")
 rules_to_keep = []
 for idx, rule in enumerate(st.session_state.custom_rules):
@@ -886,6 +849,7 @@ def apply_fully_dynamic_guardrails(jd_analysis, det_analysis, combined_rule_eval
         overall_score = min(overall_score, 40.0)
         summary = "Candidate score fell below viable threshold."
 
+    # Overall Profile Fit override when rejected
     if recommendation == "Reject":
         for r_name in combined_rule_evals:
             if "overall profile fit" in r_name.lower() or "overall fit" in r_name.lower():
@@ -899,9 +863,11 @@ def apply_fully_dynamic_guardrails(jd_analysis, det_analysis, combined_rule_eval
 
 
 def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
+    # STEP 1: Universal Auto-Translation for Multilingual Resumes & JDs
     translated_cv, detected_cv_lang = detect_and_translate_to_english(cv_text, groq_api_key)
     translated_jd, detected_jd_lang = detect_and_translate_to_english(jd_text, groq_api_key)
 
+    # STEP 2: Apply Full PII Masking
     masked_cv_text = mask_pii_in_text(translated_cv)
 
     jd_analysis = extract_jd_requirements(translated_jd, groq_api_key)
@@ -1007,7 +973,7 @@ if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_con
                 "word_file_io": word_file_io
             }
             
-            # Increment reset counter to clear file uploaders & text inputs instantly
+            # Increment form reset counter to clear file uploaders & text inputs instantly
             st.session_state.form_reset_counter += 1
             
             st.success("Evaluation completed! Attached files and text inputs have been cleared successfully.")
