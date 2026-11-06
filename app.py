@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v15.0-Universal-Multilingual-Engine"
+LOGIC_VERSION = "v16.0-Global-Multilingual-Universal-Engine"
 
 # ------------------------------------------------------------------------------
 # UNIVERSAL LANGUAGE DETECTION & TRANSLATION ENGINE
@@ -98,105 +98,84 @@ Return JSON strictly:
         return text, "English (Fallback)"
 
 # ------------------------------------------------------------------------------
-# COMPLETE PII ANONYMIZATION & MASKING ENGINE (UNIFIED ADDRESS TAG)
+# GLOBAL PII ANONYMIZATION & MASKING ENGINE (UNIVERSAL MULTI-COUNTRY)
 # ------------------------------------------------------------------------------
 def mask_pii_in_text(text: str) -> str:
     """
-    Masks all personal identifiable information (PII) into unified tags:
-    - Emails -> [REDACTED_EMAIL]
-    - Phone Numbers -> [REDACTED_PHONE]
-    - URLs -> [REDACTED_URL]
-    - Government IDs -> [REDACTED_PAN_CARD] / [REDACTED_AADHAAR] / [REDACTED_SSN]
-    - Address, City, State, Pincodes, Zipcodes, Landmarks -> [REDACTED_ADDRESS]
-    - Name, DOB, Demographics -> [REDACTED_NAME], [REDACTED_DOB], etc.
+    Globally masks personal identifiable information (PII) for candidates worldwide:
+    - Universal Emails & Handles
+    - Multi-Country Phone Formats
+    - Social Links & Websites
+    - Universal Government Identifiers (US SSN, IN PAN/Aadhaar, UK NIN, EU DNI/NIE, etc.)
+    - Global Postal / Zip Codes (US, UK Alphanumeric, EU 5-digit, IN 6-digit, etc.)
+    - Multi-Language Address Key-Values & Structural Street Patterns
+    - Demographics (DOB, Age, Gender, Marital Status, Religion, Nationality)
     """
     if not text:
         return ""
     
-    # 1. Mask Emails
-    text = re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '[REDACTED_EMAIL]', text)
+    # 1. Universal Emails
+    text = re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b', '[REDACTED_EMAIL]', text)
     
-    # 2. Mask Phone Numbers
-    text = re.sub(r'(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', '[REDACTED_PHONE]', text)
-    text = re.sub(r'\b(?:\+91[-\s]?)?[6-9]\d{9}\b', '[REDACTED_PHONE]', text)
-    text = re.sub(r'\b\d{10}\b', '[REDACTED_PHONE]', text)
+    # 2. Universal International Phone Numbers
+    text = re.sub(r'\b(?:\+\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}\b', '[REDACTED_PHONE]', text)
     text = re.sub(r'\[REDACTED_PHONE\](?:\s*[\/\-,]\s*\[REDACTED_PHONE\])+', '[REDACTED_PHONE]', text)
     
-    # 3. Mask URLs
+    # 3. Universal Web URLs & Social Profiles
     text = re.sub(r'https?://(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)', '[REDACTED_URL]', text)
-    text = re.sub(r'\b(?:linkedin\.com|github\.com)/[a-zA-Z0-9_\-/]+', '[REDACTED_URL]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:linkedin\.com|github\.com|twitter\.com|facebook\.com|gitlab\.com)/[a-zA-Z0-9_\-/]+', '[REDACTED_URL]', text, flags=re.IGNORECASE)
 
-    # 4. Mask Government IDs
-    text = re.sub(r'\b[A-Z]{5}\d{4}[A-Z]{1}\b', '[REDACTED_PAN_CARD]', text)
-    text = re.sub(r'\b\d{4}\s?\d{4}\s?\d{4}\b', '[REDACTED_AADHAAR]', text)
-    text = re.sub(r'\b\d{3}-\d{2}-\d{4}\b', '[REDACTED_SSN]', text)
+    # 4. Universal Government IDs (US SSN, India PAN/Aadhaar, UK NIN, Generic National IDs)
+    text = re.sub(r'\b\d{3}-\d{2}-\d{4}\b', '[REDACTED_GOVT_ID]', text) # US SSN
+    text = re.sub(r'\b[A-Z]{5}\d{4}[A-Z]{1}\b', '[REDACTED_GOVT_ID]', text) # IN PAN Card
+    text = re.sub(r'\b\d{4}\s?\d{4}\s?\d{4}\b', '[REDACTED_GOVT_ID]', text) # IN Aadhaar
+    text = re.sub(r'\b[A-CEGHJ-PR-TW-Z]{1}[A-CEGHJ-NPR-TW-Z]{1}\s?\d{6}\s?[A-D]{1}\b', '[REDACTED_GOVT_ID]', text, flags=re.IGNORECASE) # UK NIN
+    text = re.sub(r'\b\d{8}[A-Z]{1}\b', '[REDACTED_GOVT_ID]', text, flags=re.IGNORECASE) # Spanish DNI
 
-    # 5. Mask Pincodes & Zip Codes as [REDACTED_ADDRESS]
-    text = re.sub(r'\b\d{6}\b', '[REDACTED_ADDRESS]', text)
-    text = re.sub(r'\b\d{5}(?:-\d{4})?\b', '[REDACTED_ADDRESS]', text)
+    # 5. Universal Postal Codes (US Zip 5/9, UK Alphanumeric, EU 5-digit, IN 6-digit)
+    text = re.sub(r'\b[A-Z]{1,2}\d[A-Z0-9]?\s?\d[A-Z]{2}\b', '[REDACTED_ADDRESS]', text, flags=re.IGNORECASE) # UK Postcode
+    text = re.sub(r'\b\d{5}(?:-\d{4})?\b', '[REDACTED_ADDRESS]', text) # US Zip Code
+    text = re.sub(r'\b\d{6}\b', '[REDACTED_ADDRESS]', text) # IN/CN Zip Code
 
-    # 6. Mask States as [REDACTED_ADDRESS]
-    states_list = [
-        'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 
-        'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 
-        'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 
-        'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 
-        'Uttar Pradesh', 'Uttarakhand', 'West Bengal', 'Delhi', 'Chandigarh', 'California', 'New York',
-        'Madrid', 'Catalonia', 'Bavaria', 'Ontario', 'Quebec', 'Ile-de-France'
-    ]
-    for state in states_list:
-        text = re.sub(rf'\b{state}\b', '[REDACTED_ADDRESS]', text, flags=re.IGNORECASE)
-
-    # 7. Mask Cities as [REDACTED_ADDRESS]
-    cities_list = [
-        'Bengaluru', 'Bangalore', 'Mumbai', 'Delhi', 'Hyderabad', 'Ahmedabad', 'Chennai', 
-        'Kolkata', 'Pune', 'Surat', 'Jaipur', 'Lucknow', 'Kanpur', 'Nagpur', 'Indore', 
-        'Thane', 'Bhopal', 'Visakhapatnam', 'Patna', 'Vadodara', 'Ghaziabad', 'Ludhiana', 
-        'Agra', 'Nashik', 'Faridabad', 'Meerut', 'Rajkot', 'Kalyan', 'Vasai', 'Varanasi',
-        'New York', 'San Francisco', 'London', 'Singapore', 'Dubai', 'Barcelona', 'Madrid',
-        'Paris', 'Berlin', 'Munich', 'Tokyo', 'Toronto', 'Mexico City', 'Bogota', 'Buenos Aires'
-    ]
-    for city in cities_list:
-        text = re.sub(rf'\b{city}\b', '[REDACTED_ADDRESS]', text, flags=re.IGNORECASE)
-    
-    # 8. Explicit Address Key-Value Pairs
-    text = re.sub(
-        r'\b(?:Address|Location|Residing at|Residential Address|Permanent Address|Current Address|Street|Road|Nagar|Marg|Sector|Plot|House No|Flat No|Apartment|Society|City|State|Pincode|Zip Code|Dirección|Ubicación|Domicilio)\s*:\s*[^\n]+',
-        '[REDACTED_ADDRESS]',
-        text,
-        flags=re.IGNORECASE
+    # 6. Multilingual Key-Value Address Masking
+    address_keys = (
+        r'Address|Location|Residing at|Residential Address|Permanent Address|Current Address|'
+        r'Dirección|Ubicación|Domicilio|Adresse|Wohnort|Anschrift|Indirizzo|Endereço'
     )
+    text = re.sub(rf'\b(?:{address_keys})\s*:\s*[^\n]+', '[REDACTED_ADDRESS]', text, flags=re.IGNORECASE)
 
-    # 9. Line-by-Line Address, Apartment, Cross & Landmark Masking
+    # 7. Pattern-Based Structural Line Address Parser (Street, Ave, Blvd, Suite, Apt, Road, Way, etc.)
     lines = text.split('\n')
     masked_lines = []
-    address_keywords = [
-        'flat no', 'flat #', 'apartment', 'society', 'residency', 'layout', 
-        'block no', 'plot no', 'house no', 'door no', 'street no', 
-        'near opp', 'cross street', 'extension nagar', 'greenfield', 
-        'enclave', 'towers', 'heights', 'villa', 'colony', 'phase',
-        'cross', 'junction', 'circle', 'bypass', 'byepass', 'chowk', 'square', 'main road',
-        'calle', 'avenida', 'carrera', 'barrio', 'colonia', 'piso', 'departamento', 'codigo postal'
+    global_address_keywords = [
+        'street', 'st.', 'avenue', 'ave', 'boulevard', 'blvd', 'road', 'rd.', 'lane', 'ln.', 
+        'drive', 'dr.', 'way', 'court', 'ct.', 'suite', 'ste', 'apartment', 'apt', 'building',
+        'bldg', 'flat', 'floor', 'house no', 'plot no', 'block no', 'postal', 'zip code',
+        'calle', 'carrera', 'avenida', 'barrio', 'piso', 'departamento', 'straße', 'strasse',
+        'hausnummer', 'postleitzahl', 'rue', 'via', 'rua'
     ]
+    
     for line in lines:
         line_lower = line.lower()
-        if any(kw in line_lower for kw in address_keywords):
+        if any(re.search(rf'\b{re.escape(kw)}\b', line_lower) for kw in global_address_keywords):
             masked_lines.append('[REDACTED_ADDRESS]')
         else:
             masked_lines.append(line)
     text = '\n'.join(masked_lines)
 
-    # Clean up duplicate adjacent redacted address tags
+    # Cleanup duplicate adjacent address tags
     text = re.sub(r'(\[REDACTED_ADDRESS\]\s*[\/\-,]\s*)+', '[REDACTED_ADDRESS] ', text)
 
-    # 10. Mask Candidate Names
-    text = re.sub(r'\b(?:Candidate Name|Full Name|Name|Nombre|Nombre Completo)\s*:\s*[A-Za-z\s.]+', '[REDACTED_NAME]', text, flags=re.IGNORECASE)
+    # 8. Multilingual Candidate Name Masking
+    text = re.sub(r'\b(?:Candidate Name|Full Name|Name|Nombre|Nombre Completo|Nom|Name des Kandidaten)\s*:\s*[A-Za-z\s.]+', '[REDACTED_NAME]', text, flags=re.IGNORECASE)
     
-    # 11. Mask Date of Birth (DOB), Age & Demographics
-    text = re.sub(r'\b(?:DOB|Date of Birth|Birth Date|Fecha de Nacimiento)\s*:\s*[^\n]+', '[REDACTED_DOB]', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(?:Age|Edad)\s*:\s*\d{1,2}\s*(?:years|yrs|años)?', '[REDACTED_AGE]', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(?:Gender|Sex|Género|Sexo)\s*:\s*(?:Male|Female|Other|M|F|Masculino|Femenino)', '[REDACTED_GENDER]', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(?:Marital Status|Estado Civil)\s*:\s*(?:Single|Married|Unmarried|Divorced|Soltero|Casado|Divorciado)', '[REDACTED_MARITAL_STATUS]', text, flags=re.IGNORECASE)
+    # 9. Multilingual Demographics Stripping (DOB, Age, Gender, Marital Status, Religion, Passport)
+    text = re.sub(r'\b(?:DOB|Date of Birth|Birth Date|Fecha de Nacimiento|Geburtsdatum|Date de naissance)\s*:\s*[^\n]+', '[REDACTED_DEMOGRAPHIC]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:Age|Edad|Alter|Âge)\s*:\s*\d{1,2}\s*(?:years|yrs|años|jahre)?', '[REDACTED_DEMOGRAPHIC]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:Gender|Sex|Género|Sexo|Geschlecht)\s*:\s*(?:Male|Female|Other|M|F|Masculino|Femenino|Männlich|Weiblich)', '[REDACTED_DEMOGRAPHIC]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:Marital Status|Estado Civil|Familienstand)\s*:\s*(?:Single|Married|Unmarried|Divorced|Soltero|Casado|Divorciado|Ledig|Verheiratet)', '[REDACTED_DEMOGRAPHIC]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:Passport No|Passport Number|Pasaporte|Reisepassnummer)\s*:\s*[A-Z0-9]+', '[REDACTED_GOVT_ID]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:Nationality|Nacionalidad|Nationalität|Nationalité)\s*:\s*[A-Za-z\s]+', '[REDACTED_DEMOGRAPHIC]', text, flags=re.IGNORECASE)
 
     return text
 
@@ -269,7 +248,7 @@ def parse_date_str(date_str):
     
     date_str = str(date_str).replace("'", "").replace("`", "").strip().lower()
     
-    if any(kw in date_str for kw in ["present", "current", "till date", "continuing", "now", "today", "actualidad", "presente", "hasta la fecha"]):
+    if any(kw in date_str for kw in ["present", "current", "till date", "continuing", "now", "today", "actualidad", "presente", "hasta la fecha", "heute"]):
         return datetime.datetime.now()
     
     match = re.search(r'([a-z]+)\.?\s*[\'`]?(\d{2,4})', date_str)
@@ -282,10 +261,13 @@ def parse_date_str(date_str):
             month_lower = month_str[:3]
             months_list = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
             es_months = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
+            de_months = ['jan', 'feb', 'mär', 'apr', 'mai', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dez']
             if month_lower in months_list:
                 month = months_list.index(month_lower) + 1
             elif month_lower in es_months:
                 month = es_months.index(month_lower) + 1
+            elif month_lower in de_months:
+                month = de_months.index(month_lower) + 1
             if month > 0:
                 return datetime.datetime(int(year_str), month, 1)
         except ValueError:
@@ -315,7 +297,8 @@ def extract_experience_via_regex(text: str) -> float:
         r'(\d+(?:\.\d+)?)\+?\s*years?\s*(?:of)?\s*experience',
         r'experience\s*(?:of)?\s*(\d+(?:\.\d+)?)\+?\s*years?',
         r'(\d+(?:\.\d+)?)\+?\s*yrs?',
-        r'(\d+(?:\.\d+)?)\+?\s*años?\s*(?:de)?\s*experiencia'
+        r'(\d+(?:\.\d+)?)\+?\s*años?\s*(?:de)?\s*experiencia',
+        r'(\d+(?:\.\d+)?)\+?\s*jahre?\s*(?:an)?\s*berufserfahrung'
     ]
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
@@ -380,7 +363,7 @@ RESUME TEXT:
         lines = cleaned_cv.split('\n')
         for line_idx, line in enumerate(lines):
             line_lower = line.lower()
-            if any(kw in line_lower for kw in ['b.tech', 'b.e', 'm.tech', 'b.sc', 'm.sc', 'bca', 'mca', 'mba', 'graduation', 'degree', 'cgpa', 'college', 'university', 'school', 'education', 'hsc', 'ssc', 'diploma', 'licenciatura', 'ingenieria', 'universidad']):
+            if any(kw in line_lower for kw in ['b.tech', 'b.e', 'm.tech', 'b.sc', 'm.sc', 'bca', 'mca', 'mba', 'graduation', 'degree', 'cgpa', 'college', 'university', 'school', 'education', 'hsc', 'ssc', 'diploma', 'licenciatura', 'ingenieria', 'universidad', 'ausbildung', 'studium']):
                 continue
 
             parts = re.split(r'\s*(?:–|-|to|a)\s*', line, flags=re.IGNORECASE)
@@ -392,7 +375,7 @@ RESUME TEXT:
                         months = (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
                         if 0 < months <= 600:
                             context_block = " ".join(lines[max(0, line_idx - 2): line_idx + 1]).lower()
-                            if any(kw in context_block for kw in ["intern", "trainee", "internship", "apprentic", "pasante", "practicante"]):
+                            if any(kw in context_block for kw in ["intern", "trainee", "internship", "apprentic", "pasante", "practicante", "praktikant"]):
                                 work_periods.append((start_dt, end_dt, "internship"))
                             else:
                                 work_periods.append((start_dt, end_dt, "fulltime"))
@@ -443,6 +426,8 @@ RESUME TEXT:
     edu_pos = cleaned_cv.lower().find('education')
     if edu_pos == -1:
         edu_pos = cleaned_cv.lower().find('educación')
+    if edu_pos == -1:
+        edu_pos = cleaned_cv.lower().find('ausbildung')
     if edu_pos != -1:
         edu_subtext = cleaned_cv[edu_pos:edu_pos + 600]
         sub_ranges = re.findall(r'([A-Za-z0-9\/\-\.\s]{3,12})\s*(?:–|-|to|a)+\s*([A-Za-z0-9\/\-\.\s]{3,12})', edu_subtext, re.IGNORECASE)
@@ -597,7 +582,7 @@ def generate_in_memory_word_report(candidate_name, recruiter_id, overall_score, 
 st.set_page_config(page_title="Universal Enterprise Candidate Evaluator", layout="wide")
 
 st.title("⚡ Universal Enterprise Candidate Evaluation System")
-st.caption("Multilingual Auto-Translation Engine + Domain Competency + Contextual Gap Guardrails (PII Protected)")
+st.caption("Multilingual Auto-Translation Engine + Global PII Protection + Contextual Gap Guardrails")
 
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = [
@@ -614,11 +599,9 @@ if "editing_rule_id" not in st.session_state:
 if "evaluation_results" not in st.session_state:
     st.session_state.evaluation_results = None
 
-# Initialize unique widget keys for clearing inputs post-evaluation
 if "form_reset_counter" not in st.session_state:
     st.session_state.form_reset_counter = 0
 
-# Initialize rule form reset counter and expander state
 if "rule_form_reset_counter" not in st.session_state:
     st.session_state.rule_form_reset_counter = 0
 
@@ -651,7 +634,7 @@ with st.sidebar:
         
     st.info(f"Model: {MODEL_VERSION}\nLogic: {LOGIC_VERSION}\nMultilingual: All Languages Auto-Translate")
 
-# Section 1: Inputs (Dynamic key suffix based on form_reset_counter to clear attachments & text)
+# Section 1: Inputs
 st.markdown("### 1. Inputs (Job Description & Candidate Resume)")
 
 counter = st.session_state.form_reset_counter
@@ -689,7 +672,6 @@ st.markdown("---")
 # Section 2: Rules Builder & Editor
 st.markdown("### 2. 🎛 N-Rules Builder & Editor")
 
-# Expander managed via session state so we can collapse it programmatically
 is_expanded = st.expander("➕ Add New Evaluation Rule", expanded=st.session_state.expand_add_rule)
 with is_expanded:
     rc = st.session_state.rule_form_reset_counter
@@ -707,7 +689,6 @@ with is_expanded:
                 "criteria": new_criteria
             })
             
-            # Increment counter to clear inputs & collapse expander window
             st.session_state.rule_form_reset_counter += 1
             st.session_state.expand_add_rule = False
             
@@ -878,7 +859,6 @@ def apply_fully_dynamic_guardrails(jd_analysis, det_analysis, combined_rule_eval
                 }
 
     return combined_rule_evals, overall_score, recommendation, summary
-
 
 def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
     translated_cv, detected_cv_lang = detect_and_translate_to_english(cv_text, groq_api_key)
