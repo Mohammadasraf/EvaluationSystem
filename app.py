@@ -618,6 +618,13 @@ if "evaluation_results" not in st.session_state:
 if "form_reset_counter" not in st.session_state:
     st.session_state.form_reset_counter = 0
 
+# Initialize rule form reset counter and expander state
+if "rule_form_reset_counter" not in st.session_state:
+    st.session_state.rule_form_reset_counter = 0
+
+if "expand_add_rule" not in st.session_state:
+    st.session_state.expand_add_rule = False
+
 with st.sidebar:
     st.header("🔐 Security & Credentials")
     evaluator_id = st.text_input("Evaluator / User ID", value="alatifbhai@apexsystems")
@@ -681,10 +688,14 @@ st.markdown("---")
 
 # Section 2: Rules Builder & Editor
 st.markdown("### 2. 🎛 N-Rules Builder & Editor")
-with st.expander("➕ Add New Evaluation Rule", expanded=False):
-    new_name = st.text_input("Rule Name", key="new_r_name")
-    new_type = st.selectbox("Rule Type", ["Deterministic", "Skill Check", "Compliance", "Custom"], key="new_r_type")
-    new_criteria = st.text_area("Rule Description / Criteria", key="new_r_crit")
+
+# Expander managed via session state so we can collapse it programmatically
+is_expanded = st.expander("➕ Add New Evaluation Rule", expanded=st.session_state.expand_add_rule)
+with is_expanded:
+    rc = st.session_state.rule_form_reset_counter
+    new_name = st.text_input("Rule Name", key=f"new_r_name_{rc}")
+    new_type = st.selectbox("Rule Type", ["Deterministic", "Skill Check", "Compliance", "Custom"], key=f"new_r_type_{rc}")
+    new_criteria = st.text_area("Rule Description / Criteria", key=f"new_r_crit_{rc}")
     
     if st.button("Add Rule"):
         if new_name and new_criteria:
@@ -695,6 +706,11 @@ with st.expander("➕ Add New Evaluation Rule", expanded=False):
                 "type": new_type,
                 "criteria": new_criteria
             })
+            
+            # Increment counter to clear inputs & collapse expander window
+            st.session_state.rule_form_reset_counter += 1
+            st.session_state.expand_add_rule = False
+            
             st.success("Rule added successfully!")
             st.rerun()
         else:
