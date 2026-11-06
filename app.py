@@ -678,50 +678,65 @@ with col_cv:
 
 st.markdown("---")
 
-# Section 2: Rules Builder & Editor (With Auto-Clear & Auto-Collapse Expander)
+# Section 2: Rules Builder & Editor (State-based Container for Seamless Collapse & Clear)
 st.markdown("### 2. 🎛 N-Rules Builder & Editor")
 
-if "add_rule_expanded" not in st.session_state:
-    st.session_state.add_rule_expanded = False
+if "show_add_rule_form" not in st.session_state:
+    st.session_state.show_add_rule_form = False
 
 if "rule_add_counter" not in st.session_state:
     st.session_state.rule_add_counter = 0
 
-r_counter = st.session_state.rule_add_counter
-
-is_expanded = st.expander("➕ Add New Evaluation Rule", expanded=st.session_state.add_rule_expanded)
-
-with is_expanded:
-    new_name = st.text_input("Rule Name", key=f"new_r_name_{r_counter}")
-    new_type = st.selectbox("Rule Type", ["Deterministic", "Skill Check", "Compliance", "Custom"], key=f"new_r_type_{r_counter}")
-    new_criteria = st.text_area("Rule Description / Criteria", key=f"new_r_crit_{r_counter}")
-    
-    col_b1, col_b2 = st.columns(2)
-    with col_b1:
-        if st.button("Add Rule", key="btn_add_rule_submit"):
-            if new_name and new_criteria:
-                max_id = max([r['id'] for r in st.session_state.custom_rules]) if st.session_state.custom_rules else 0
-                st.session_state.custom_rules.append({
-                    "id": max_id + 1,
-                    "name": new_name,
-                    "type": new_type,
-                    "criteria": new_criteria
-                })
-                # Clear text inputs & auto-collapse window
-                st.session_state.rule_add_counter += 1
-                st.session_state.add_rule_expanded = False
-                
-                st.success("Rule added successfully!")
-                st.rerun()
-            else:
-                st.session_state.add_rule_expanded = True
-                st.warning("Please fill both Rule Name and Criteria.")
-                
-    with col_b2:
-        if st.button("Cancel", key="btn_cancel_rule"):
-            st.session_state.add_rule_expanded = False
+# Header bar with dynamic open/close action button
+col_t1, col_t2 = st.columns([4, 1])
+with col_t1:
+    st.markdown("Manage and customize evaluation rules dynamically.")
+with col_t2:
+    if not st.session_state.show_add_rule_form:
+        if st.button("➕ Add Rule", key="btn_toggle_open"):
+            st.session_state.show_add_rule_form = True
+            st.rerun()
+    else:
+        if st.button("❌ Close Form", key="btn_toggle_close"):
+            st.session_state.show_add_rule_form = False
             st.rerun()
 
+r_counter = st.session_state.rule_add_counter
+
+# Render rule creation form inside a container when active
+if st.session_state.show_add_rule_form:
+    with st.container(border=True):
+        st.markdown("#### ➕ Add New Evaluation Rule")
+        new_name = st.text_input("Rule Name", key=f"new_r_name_{r_counter}")
+        new_type = st.selectbox("Rule Type", ["Deterministic", "Skill Check", "Compliance", "Custom"], key=f"new_r_type_{r_counter}")
+        new_criteria = st.text_area("Rule Description / Criteria", key=f"new_r_crit_{r_counter}")
+        
+        col_b1, col_b2 = st.columns(2)
+        with col_b1:
+            if st.button("Save & Add Rule", key="btn_add_rule_submit", type="primary"):
+                if new_name and new_criteria:
+                    max_id = max([r['id'] for r in st.session_state.custom_rules]) if st.session_state.custom_rules else 0
+                    st.session_state.custom_rules.append({
+                        "id": max_id + 1,
+                        "name": new_name,
+                        "type": new_type,
+                        "criteria": new_criteria
+                    })
+                    # Clear inputs & collapse form window
+                    st.session_state.rule_add_counter += 1
+                    st.session_state.show_add_rule_form = False
+                    
+                    st.success("Rule added successfully!")
+                    st.rerun()
+                else:
+                    st.warning("Please fill both Rule Name and Criteria.")
+                    
+        with col_b2:
+            if st.button("Cancel", key="btn_cancel_rule"):
+                st.session_state.show_add_rule_form = False
+                st.rerun()
+
+st.markdown("---")
 st.markdown("#### Current Evaluation Rules")
 rules_to_keep = []
 for idx, rule in enumerate(st.session_state.custom_rules):
