@@ -614,6 +614,10 @@ if "editing_rule_id" not in st.session_state:
 if "evaluation_results" not in st.session_state:
     st.session_state.evaluation_results = None
 
+# Initialize unique widget keys for clearing inputs post-evaluation
+if "form_reset_counter" not in st.session_state:
+    st.session_state.form_reset_counter = 0
+
 with st.sidebar:
     st.header("🔐 Security & Credentials")
     evaluator_id = st.text_input("Evaluator / User ID", value="alatifbhai@apexsystems")
@@ -640,9 +644,10 @@ with st.sidebar:
         
     st.info(f"Model: {MODEL_VERSION}\nLogic: {LOGIC_VERSION}\nMultilingual: All Languages Auto-Translate")
 
-# Section 1: Inputs
+# Section 1: Inputs (Dynamic key suffix based on form_reset_counter to clear attachments & text)
 st.markdown("### 1. Inputs (Job Description & Candidate Resume)")
 
+counter = st.session_state.form_reset_counter
 jd_file = None
 cv_file = None
 jd_text = ""
@@ -653,24 +658,24 @@ col_jd, col_cv = st.columns(2)
 
 with col_jd:
     st.subheader("📄 Job Description (JD)")
-    jd_input_type = st.radio("JD Input Method", ["File Upload", "Paste Text"], key="jd_type")
+    jd_input_type = st.radio("JD Input Method", ["File Upload", "Paste Text"], key=f"jd_type_{counter}")
     if jd_input_type == "File Upload":
-        jd_file = st.file_uploader("Upload JD", type=["pdf", "docx", "txt"], key="jd_file")
+        jd_file = st.file_uploader("Upload JD", type=["pdf", "docx", "txt"], key=f"jd_file_{counter}")
         if jd_file:
             jd_text = extract_text_with_ocr(jd_file)
     else:
-        jd_text = st.text_area("Paste JD Content", height=150)
+        jd_text = st.text_area("Paste JD Content", height=150, key=f"jd_textarea_{counter}")
 
 with col_cv:
     st.subheader("👤 Candidate Resume (CV)")
-    candidate_name = st.text_input("Candidate Full Name (Masked for Storage)", value="Candidate Name")
-    cv_input_type = st.radio("CV Input Method", ["File Upload", "Paste Text"], key="cv_type")
+    candidate_name = st.text_input("Candidate Full Name (Masked for Storage)", value="Candidate Name", key=f"cand_name_{counter}")
+    cv_input_type = st.radio("CV Input Method", ["File Upload", "Paste Text"], key=f"cv_type_{counter}")
     if cv_input_type == "File Upload":
-        cv_file = st.file_uploader("Upload Resume", type=["pdf", "docx", "txt", "png", "jpg"], key="cv_file")
+        cv_file = st.file_uploader("Upload Resume", type=["pdf", "docx", "txt", "png", "jpg"], key=f"cv_file_{counter}")
         if cv_file:
             cv_text = extract_text_with_ocr(cv_file)
     else:
-        cv_text = st.text_area("Paste Candidate Resume Content", height=150)
+        cv_text = st.text_area("Paste Candidate Resume Content", height=150, key=f"cv_textarea_{counter}")
 
 st.markdown("---")
 
@@ -967,7 +972,12 @@ if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_con
                 "summary": summary_text,
                 "word_file_io": word_file_io
             }
-            st.success("Evaluation completed with strict PII protection & Multilingual Auto-Translation!")
+            
+            # Increment form reset counter to clear file uploaders & text inputs instantly
+            st.session_state.form_reset_counter += 1
+            
+            st.success("Evaluation completed! Attached files and text inputs have been cleared successfully.")
+            st.rerun()
 
 # ------------------------------------------------------------------------------
 # RENDER UI RESULTS FROM SESSION STATE
