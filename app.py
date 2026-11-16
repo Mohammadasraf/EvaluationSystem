@@ -24,49 +24,131 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v17.0-100%-Consistent-Universal-Timeline-Engine"
+LOGIC_VERSION = "v18.0-Universal-Semantic-Extraction-Deterministic-Math"
 
 # ------------------------------------------------------------------------------
-# UNIVERSAL LANGUAGE DETECTION & TRANSLATION ENGINE
+# UNIVERSAL MULTILINGUAL TRANSLATION & STRUCTURED TIMELINE EXTRACTION
 # ------------------------------------------------------------------------------
-def detect_and_translate_to_english(text: str, groq_api_key: str) -> tuple[str, str]:
+def translate_and_extract_cv_structure(text: str, groq_api_key: str) -> tuple[str, str, dict]:
     """
-    Detects the input text language and translates non-English text into English.
-    Returns a tuple of (translated_text, detected_language).
+    1. Detects input language and translates the full CV into professional English.
+    2. Semantically extracts ONLY genuine employment timelines (full-time & internships)
+       and education timelines into structured JSON—completely ignoring academic projects,
+       university coursework, personal projects, and certifications across ALL languages.
     """
+    empty_timeline = {
+        "fulltime_roles": [],
+        "internship_roles": [],
+        "education_entries": [],
+        "stated_total_experience_years": 0.0
+    }
+
     if not text or not text.strip():
-        return "", "English"
+        return "", "English", empty_timeline
 
     if not groq_api_key:
-        return text, "Unknown (No API Key)"
+        return text, "Unknown (No API Key)", empty_timeline
 
     system_prompt = (
-        "You are an expert multilingual document translator and language detector. "
-        "Analyze the input text. Detect its primary language. "
-        "If the text is NOT in English, translate it accurately to professional English, maintaining all numbers, dates, technical skills, job titles, and formatting context. "
-        "CRITICAL INSTRUCTION FOR SECTION HEADERS: Always translate and standardize resume section headers/titles into standard English uppercase (e.g., translate 'EDUCACIÓN' or 'ESTUDIOS' to 'EDUCATION', 'PROYECTOS' or 'PROYECTOS ACADÉMICOS' to 'PROJECTS', 'RESUMEN' to 'SUMMARY', 'HABILIDADES' to 'SKILLS') so that automated timeline parsers can recognize them correctly. "
-        "If the text is already in English, return it unchanged. "
-        "Return ONLY valid JSON matching this schema: {\"detected_language\": \"Spanish\", \"translated_text\": \"...\"}"
+        "You are an expert multilingual HR data parser and translator. "
+        "Your job is to: "
+        "1) Detect the document's primary language and translate the entire text accurately into English. "
+        "2) Extract structured timeline intervals into strict JSON. "
+        "CRITICAL EXTRACTION RULES (APPLIES TO ALL LANGUAGES): "
+        "- 'fulltime_roles': Include ONLY paid, formal full-time or contract employment at a company/organization. "
+        "- 'internship_roles': Include ONLY formal internships, apprenticeships, or industrial traineeships. "
+        "- STRICT EXCLUSIONS: NEVER include university degrees, master's/bachelor's programs, academic projects ('Proyectos Académicos', capstone projects, thesis work), personal projects, hackathons, awards, or certifications in 'fulltime_roles' or 'internship_roles'. Put degrees/studies ONLY in 'education_entries'. "
+        "- If the candidate is a student with only academic/personal projects and no formal jobs, 'fulltime_roles' and 'internship_roles' MUST be empty lists []. "
+        "- Normalize all dates to 'MM/YYYY' or 'YYYY' format, and use 'Present' for ongoing roles/studies. "
+        "Return ONLY valid JSON."
     )
 
-    sample_text = text[:3000]
+    user_prompt = f"""Analyze, translate, and extract structured timelines from this CV:
 
-    user_prompt = f"""Analyze and translate the following document text if it is not in English:
+--- CV TEXT ---
+{text[:6000]}
 
---- DOCUMENT TEXT ---
-{sample_text}
-
-Return JSON strictly:
+Return ONLY valid JSON matching this exact schema:
 {{
-  "detected_language": "Language Name (e.g., Spanish, French, German, English)",
-  "translated_text": "Full English translated text..."
+  "detected_language": "Language Name (e.g., Spanish, English, German)",
+  "translated_text": "Complete English translation of the CV...",
+  "fulltime_roles": [
+    {{"title": "Job Title", "company": "Company Name", "start": "MM/YYYY or YYYY", "end": "MM/YYYY or YYYY or Present"}}
+  ],
+  "internship_roles": [
+    {{"title": "Intern Title", "company": "Company Name", "start": "MM/YYYY or YYYY", "end": "MM/YYYY or YYYY or Present"}}
+  ],
+  "education_entries": [
+    {{"degree": "Degree Name", "institution": "University Name", "start": "MM/YYYY or YYYY", "end": "MM/YYYY or YYYY or Present"}}
+  ],
+  "stated_total_experience_years": 0.0
 }}
 """
     try:
         client = Groq(api_key=groq_api_key.strip())
         completion = client.chat.completions.create(
             model=MODEL_VERSION,
-            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.0,
+            max_tokens=4000
+        )
+        content = completion.choices[0].message.content.strip()
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+
+        parsed = json.loads(repair_json(content))
+        detected_lang = parsed.get("detected_language", "English")
+        translated_text = parsed.get("translated_text", text)
+
+        # If CV was longer than 6000 chars and non-English, translate remaining text cleanly
+        if len(text) > 6000 and "english" not in detected_lang.lower():
+            full_prompt = f"Translate the following {detected_lang} document to English. Output ONLY the translated text:\n\n{text}"
+            full_completion = client.chat.completions.create(
+                model=MODEL_VERSION,
+                messages=[
+                    {"role": "system", "content": "You are a professional translator."},
+                    {"role": "user", "content": full_prompt}
+                ],
+                temperature=0.0,
+                max_tokens=4000
+            )
+            translated_text = full_completion.choices[0].message.content.strip()
+
+        timeline_data = {
+            "fulltime_roles": parsed.get("fulltime_roles", []) or [],
+            "internship_roles": parsed.get("internship_roles", []) or [],
+            "education_entries": parsed.get("education_entries", []) or [],
+            "stated_total_experience_years": float(parsed.get("stated_total_experience_years", 0.0) or 0.0)
+        }
+        return translated_text, detected_lang, timeline_data
+    except Exception:
+        return text, "English (Fallback)", empty_timeline
+
+
+def detect_and_translate_jd(text: str, groq_api_key: str) -> tuple[str, str]:
+    """Translates non-English Job Descriptions into English."""
+    if not text or not text.strip():
+        return "", "English"
+    if not groq_api_key:
+        return text, "Unknown (No API Key)"
+
+    system_prompt = (
+        "Detect the language of the Job Description and translate it to professional English if it is not in English. "
+        "Return ONLY valid JSON: {\"detected_language\": \"English\", \"translated_text\": \"...\"}"
+    )
+    try:
+        client = Groq(api_key=groq_api_key.strip())
+        completion = client.chat.completions.create(
+            model=MODEL_VERSION,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text[:4000]}
+            ],
             temperature=0.0,
             max_tokens=2500
         )
@@ -77,24 +159,7 @@ Return JSON strictly:
             content = content.split("```")[1].split("```")[0].strip()
 
         parsed = json.loads(repair_json(content))
-        detected_lang = parsed.get("detected_language", "English")
-        
-        if len(text) <= 3000:
-            translated_text = parsed.get("translated_text", text)
-        else:
-            if "english" not in detected_lang.lower():
-                full_prompt = f"Translate the following {detected_lang} document to English. Output ONLY the translated text without extra commentary:\n\n{text}"
-                full_completion = client.chat.completions.create(
-                    model=MODEL_VERSION,
-                    messages=[{"role": "system", "content": "You are a professional translator. Translate text accurately to English."}, {"role": "user", "content": full_prompt}],
-                    temperature=0.0,
-                    max_tokens=4000
-                )
-                translated_text = full_completion.choices[0].message.content.strip()
-            else:
-                translated_text = text
-
-        return translated_text, detected_lang
+        return parsed.get("translated_text", text), parsed.get("detected_language", "English")
     except Exception:
         return text, "English (Fallback)"
 
@@ -104,7 +169,7 @@ Return JSON strictly:
 def mask_pii_in_text(text: str) -> str:
     """
     Globally masks personal identifiable information (PII) for candidates worldwide.
-    Executed AFTER deterministic timeline extraction so date ranges are never corrupted.
+    Executed AFTER timeline extraction so date ranges are never corrupted.
     """
     if not text:
         return ""
@@ -230,23 +295,23 @@ def format_time_gap(value):
         elif val >= 1.0:
             return f"{val:.1f} Yrs"
         else:
-            return str(value)
+            return "0.0 Yrs"
     except (ValueError, TypeError):
         return str(value)
 
 # ------------------------------------------------------------------------------
-# UNIVERSAL 100% DETERMINISTIC DATE PARSING & CALCULATION ENGINE
+# 100% DETERMINISTIC MATH ENGINE OVER STRUCTURED TIMELINES
 # ------------------------------------------------------------------------------
-def parse_date_str(date_str):
+def parse_date_str(date_str: str, is_end: bool = False):
     if not date_str:
         return None
     
     date_str = str(date_str).replace("'", "").replace("`", "").strip().lower()
     
-    if any(kw in date_str for kw in ["present", "current", "till date", "continuing", "now", "today", "actualidad", "presente", "hasta la fecha", "heute"]):
+    if any(kw in date_str for kw in ["present", "current", "till date", "continuing", "now", "today", "actualidad", "actual", "presente", "hasta la fecha", "heute"]):
         return datetime.datetime.now()
     
-    # Match Month Name + 2 or 4 digit year (e.g., "Apr 24", "January 2022", "Mar. 2024")
+    # Match Month Name + 2 or 4 digit year
     match = re.search(r'([a-z]+)\.?\s*[\'`]?(\d{2,4})', date_str)
     if match:
         month_str, year_str = match.groups()
@@ -276,7 +341,7 @@ def parse_date_str(date_str):
         except ValueError:
             pass
 
-    # Match Numeric MM/YYYY or MM-YYYY or MM.YYYY (e.g., "04/2024", "4/22")
+    # Match Numeric MM/YYYY or MM-YYYY
     match_num = re.search(r'(\d{1,2})[/\-\.](\d{2,4})', date_str)
     if match_num:
         m, y = match_num.groups()
@@ -294,132 +359,28 @@ def parse_date_str(date_str):
     match_yr = re.search(r'\b(20\d{2}|19\d{2})\b', date_str)
     if match_yr:
         try:
-            return datetime.datetime(int(match_yr.group(1)), 1, 1)
+            return datetime.datetime(int(match_yr.group(1)), 12 if is_end else 1, 1)
         except ValueError:
             pass
 
     return None
 
-def extract_experience_via_regex(text: str) -> float:
-    patterns = [
-        r'(\d+(?:\.\d+)?)\+?\s*years?\s*(?:of)?\s*(?:relevant|total|professional|work|industry)?\s*experience',
-        r'experience\s*(?:of)?\s*(\d+(?:\.\d+)?)\+?\s*years?',
-        r'(\d+(?:\.\d+)?)\+?\s*yrs?\s*(?:of)?\s*exp',
-        r'(\d+(?:\.\d+)?)\+?\s*años?\s*(?:de)?\s*experiencia',
-        r'(\d+(?:\.\d+)?)\+?\s*jahre?\s*(?:an)?\s*berufserfahrung'
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            try:
-                return float(match.group(1))
-            except ValueError:
-                continue
-    return 0.0
 
-def calculate_deterministic_timeline(cv_text: str, groq_api_key: str = "") -> dict:
+def calculate_deterministic_timeline(timeline_data: dict) -> dict:
     """
-    100% Deterministic, Multi-Format CV Timeline Calculator.
-    Zero LLM dependency for math -> Zero fluctuation across runs.
-    Strictly filters out Education, Certifications, Courses, and Projects.
+    100% Deterministic Python Math Engine operating on LLM-extracted structured roles.
+    Zero static language headers/keywords required. Zero math fluctuation.
     """
-    # Standardize unicode dashes (–, —, −) to regular hyphen (-) and clean pipes
-    normalized_text = re.sub(r'[–—−]', '-', cv_text.replace("|", " "))
-
-    # Separate sections using major CV headings so Education, Certifications, and Projects never pollute Work Experience
-    section_pattern = re.compile(
-        r'(?:^|\n)\s*(?:#+\s*)?'
-        r'(WORK\s+EXPERIENCE|PROFESSIONAL\s+EXPERIENCE|EMPLOYMENT\s+HISTORY|EXPERIENCE|CAREER\s+HISTORY|WORK\s+HISTORY|'
-        r'EDUCATION|ACADEMIC|QUALIFICATIONS|CERTIFICATIONS|CERTIFICATES|LICENSES|COURSES|TRAINING|'
-        r'PROJECTS|KEY\s+PROJECTS|PERSONAL\s+PROJECTS|SKILLS|TECHNICAL\s+SKILLS|AWARDS|PUBLICATIONS)'
-        r'\s*(?::|\n|$)',
-        re.IGNORECASE
-    )
-
-    sections = {}
-    matches = list(section_pattern.finditer(normalized_text))
-
-    if matches:
-        # Text before the first detected header (Header / Professional Summary)
-        sections["HEADER"] = normalized_text[:matches[0].start()]
-        for i, m in enumerate(matches):
-            sec_title = m.group(1).upper()
-            start_pos = m.end()
-            end_pos = matches[i + 1].start() if i + 1 < len(matches) else len(normalized_text)
-            sec_body = normalized_text[start_pos:end_pos]
-
-            if any(k in sec_title for k in ["EXPERIENCE", "EMPLOYMENT", "CAREER", "WORK"]):
-                sections["WORK"] = sections.get("WORK", "") + "\n" + sec_body
-            elif any(k in sec_title for k in ["EDUCATION", "ACADEMIC", "QUALIFICATION"]):
-                sections["EDUCATION"] = sections.get("EDUCATION", "") + "\n" + sec_body
-            elif any(k in sec_title for k in ["CERTIFICAT", "LICENSE", "COURSE", "TRAINING", "PROJECT", "AWARD", "PUBLICATION"]):
-                sections["IGNORE"] = sections.get("IGNORE", "") + "\n" + sec_body
-    else:
-        # Fallback if CV has no standard section headers
-        sections["WORK"] = normalized_text
-
-    # Use strictly the WORK section if found; otherwise fallback to whole text minus known education/cert keywords
-    target_work_text = sections.get("WORK", "").strip()
-    if not target_work_text:
-        target_work_text = normalized_text
-
-    # Universal Multi-Format Date Range Regex:
-    # Supports: Apr '24 - Present, Jan 2022 - Mar 2024, 04/2022 - 10/2024, 4/22 - 10/24, 2020 - 2024
-    comprehensive_date_pattern = re.compile(
-        r'('
-        r'(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|ene|abr|ago|dic|mär|mai|okt|dez|fév|fev|avr|jui|juil|aoû|aou|déc)[a-z]*\.?\s*[\'`]?\d{2,4}|'
-        r'\b\d{1,2}[/\-\.]\d{2,4}\b|'
-        r'\b(?:19|20)\d{2}\b'
-        r')'
-        r'\s*(?:-|to|a|bis|till|until|through|au)\s*'
-        r'('
-        r'(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|ene|abr|ago|dic|mär|mai|okt|dez|fév|fev|avr|jui|juil|aoû|aou|déc)[a-z]*\.?\s*[\'`]?\d{2,4}|'
-        r'\b\d{1,2}[/\-\.]\d{2,4}\b|'
-        r'\b(?:19|20)\d{2}\b|'
-        r'present|current|till\s*date|now|today|continuing|actualidad|presente|heute|actuel'
-        r')',
-        re.IGNORECASE
-    )
-
-    ft_periods = []
-    in_periods = []
-
-    edu_and_cert_exclusions = [
-        'b.tech', 'b.e', 'm.tech', 'b.sc', 'm.sc', 'bca', 'mca', 'mba', 'ph.d', 'phd',
-        'bachelor', 'master', 'degree', 'diploma', 'cgpa', 'gpa', 'university', 'college',
-        'school', 'hsc', 'ssc', 'certified', 'certification', 'certificate', 'credential',
-        'license', 'course', 'bootcamp', 'udemy', 'coursera', 'edx', 'aws certified', 'azure certified'
-    ]
-
-    internship_keywords = [
-        'intern', 'trainee', 'internship', 'apprentic', 'pasante', 'practicante', 'praktikant', 'stagiaire'
-    ]
-
-    lines = target_work_text.split('\n')
-    for idx, line in enumerate(lines):
-        line_lower = line.lower()
-        context_block = " ".join(lines[max(0, idx - 2): min(len(lines), idx + 2)]).lower()
-
-        # Strictly exclude any line/block referencing education or external certifications
-        if any(excl in line_lower for excl in edu_and_cert_exclusions):
-            continue
-
-        matches_in_line = comprehensive_date_pattern.findall(line)
-        for start_str, end_str in matches_in_line:
-            start_dt = parse_date_str(start_str)
-            end_dt = parse_date_str(end_str)
-
-            # If year-only end date (e.g., "2020 - 2022"), set end month to December for accurate full-year span
-            if end_dt and re.fullmatch(r'(?:19|20)\d{2}', end_str.strip()):
-                end_dt = datetime.datetime(end_dt.year, 12, 1)
-
+    def build_intervals(role_list):
+        intervals = []
+        for item in role_list:
+            start_dt = parse_date_str(item.get("start", ""), is_end=False)
+            end_dt = parse_date_str(item.get("end", ""), is_end=True)
             if start_dt and end_dt and start_dt <= end_dt:
                 months = (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
                 if 0 < months <= 600:
-                    if any(kw in context_block for kw in internship_keywords):
-                        in_periods.append((start_dt, end_dt))
-                    else:
-                        ft_periods.append((start_dt, end_dt))
+                    intervals.append((start_dt, end_dt))
+        return intervals
 
     def merge_intervals(intervals):
         if not intervals:
@@ -433,6 +394,9 @@ def calculate_deterministic_timeline(cv_text: str, groq_api_key: str = "") -> di
                 merged.append([start, end])
         return merged
 
+    ft_periods = build_intervals(timeline_data.get("fulltime_roles", []))
+    in_periods = build_intervals(timeline_data.get("internship_roles", []))
+
     merged_ft = merge_intervals(ft_periods)
     merged_in = merge_intervals(in_periods)
 
@@ -442,10 +406,11 @@ def calculate_deterministic_timeline(cv_text: str, groq_api_key: str = "") -> di
     total_years = round(ft_months / 12.0, 1)
     intern_years = round(in_months / 12.0, 1)
 
-    # Ultimate Fallback: If no work date ranges exist in CV, extract stated experience from Summary/Header
-    if total_years == 0.0:
-        summary_text = sections.get("HEADER", "") + "\n" + target_work_text
-        total_years = extract_experience_via_regex(summary_text)
+    # Fallback ONLY if candidate explicitly wrote "X years of experience" in summary without listing dated jobs
+    if total_years == 0.0 and not merged_ft:
+        stated_exp = float(timeline_data.get("stated_total_experience_years", 0.0) or 0.0)
+        if stated_exp > 0.0:
+            total_years = round(stated_exp, 1)
 
     # Experience Gaps Calculation
     exp_gaps = []
@@ -461,20 +426,16 @@ def calculate_deterministic_timeline(cv_text: str, groq_api_key: str = "") -> di
         exp_gaps = ["No major experience gaps found"]
 
     # Education-to-Job Transition Gap Calculation
-    edu_end_date = None
-    edu_text = sections.get("EDUCATION", "")
-    if edu_text:
-        edu_ranges = comprehensive_date_pattern.findall(edu_text)
-        edu_end_dates = []
-        for _, e_str in edu_ranges:
-            e_dt = parse_date_str(e_str)
-            if e_dt:
-                edu_end_dates.append(e_dt)
-        if edu_end_dates:
-            edu_end_date = max(edu_end_dates)
+    edu_end_dates = []
+    for edu in timeline_data.get("education_entries", []):
+        e_dt = parse_date_str(edu.get("end", ""), is_end=True)
+        if e_dt:
+            edu_end_dates.append(e_dt)
 
+    edu_end_date = max(edu_end_dates) if edu_end_dates else None
     education_to_job_gap_str = "0 Months (Seamless)"
     all_work_starts = [s for s, _ in merged_ft] + [s for s, _ in merged_in]
+
     if edu_end_date and all_work_starts:
         first_work_start = min(all_work_starts)
         if first_work_start > edu_end_date:
@@ -495,7 +456,12 @@ def calculate_deterministic_timeline(cv_text: str, groq_api_key: str = "") -> di
         "total_experience_years": total_years,
         "experience_gaps": exp_gaps,
         "education_gaps": ["No education gaps found"],
-        "education_to_job_gap": education_to_job_gap_str
+        "education_to_job_gap": education_to_job_gap_str,
+        "extracted_roles_debug": {
+            "fulltime": timeline_data.get("fulltime_roles", []),
+            "internships": timeline_data.get("internship_roles", []),
+            "education": timeline_data.get("education_entries", [])
+        }
     }
 
 # ------------------------------------------------------------------------------
@@ -520,7 +486,6 @@ def extract_text_with_ocr(uploaded_file) -> str:
     elif file_ext == 'docx':
         doc = docx.Document(uploaded_file)
         paragraphs_text = [para.text for para in doc.paragraphs if para.text.strip()]
-        # Also extract text from tables in DOCX resumes (common in multi-column templates)
         tables_text = []
         for table in doc.tables:
             for row in table.rows:
@@ -630,7 +595,7 @@ def generate_in_memory_word_report(candidate_name, recruiter_id, overall_score, 
 st.set_page_config(page_title="Universal Enterprise Candidate Evaluator", layout="wide")
 
 st.title("⚡ Universal Enterprise Candidate Evaluation System")
-st.caption("100% Consistent Deterministic Timeline Engine + Global PII Protection + Multilingual Support")
+st.caption("100% Universal Semantic Extraction + Deterministic Math Engine + Global PII Protection")
 
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = [
@@ -680,7 +645,7 @@ with st.sidebar:
     else:
         st.success("✅ Groq API Key loaded securely from Secrets")
         
-    st.info(f"Model: {MODEL_VERSION}\nLogic: {LOGIC_VERSION}\nTimeline: 100% Deterministic Regex")
+    st.info(f"Model: {MODEL_VERSION}\nLogic: {LOGIC_VERSION}\nEngine: Semantic JSON + Deterministic Math")
 
 # Section 1: Inputs
 st.markdown("### 1. Inputs (Job Description & Candidate Resume)")
@@ -909,15 +874,16 @@ def apply_fully_dynamic_guardrails(jd_analysis, det_analysis, combined_rule_eval
     return combined_rule_evals, overall_score, recommendation, summary
 
 def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
-    translated_cv, detected_cv_lang = detect_and_translate_to_english(cv_text, groq_api_key)
-    translated_jd, detected_jd_lang = detect_and_translate_to_english(jd_text, groq_api_key)
+    # 1. Translate AND extract structured JSON timelines semantically in one clean step
+    translated_cv, detected_cv_lang, timeline_data = translate_and_extract_cv_structure(cv_text, groq_api_key)
+    translated_jd, detected_jd_lang = detect_and_translate_jd(jd_text, groq_api_key)
 
-    # 1. Calculate deterministic timeline BEFORE PII masking so dates are never corrupted
-    profile_details = calculate_deterministic_timeline(translated_cv)
+    # 2. Run 100% deterministic math over extracted structured dates
+    profile_details = calculate_deterministic_timeline(timeline_data)
     profile_details["detected_cv_language"] = detected_cv_lang
     profile_details["detected_jd_language"] = detected_jd_lang
 
-    # 2. Apply PII masking for LLM evaluation & storage
+    # 3. Apply PII masking for LLM evaluation & storage
     masked_cv_text = mask_pii_in_text(translated_cv)
 
     jd_analysis = extract_jd_requirements(translated_jd, groq_api_key)
@@ -963,7 +929,7 @@ if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_con
     elif not cv_text or not jd_text:
         st.warning("Please provide both JD and Candidate Resume.")
     else:
-        with st.spinner("Running PII-protected deterministic evaluation matrix..."):
+        with st.spinner("Running PII-protected semantic & deterministic evaluation matrix..."):
             cv_name = "Anonymized_CV"
             jd_name = jd_file.name if (jd_file and hasattr(jd_file, 'name')) else "Pasted JD Text"
             anonymized_candidate_name = f"Candidate_{abs(hash(candidate_name)) % 10000}"
