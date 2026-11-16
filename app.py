@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v16.0-Global-Multilingual-Universal-Engine"
+LOGIC_VERSION = "v17.0-100%-Consistent-Universal-Timeline-Engine"
 
 # ------------------------------------------------------------------------------
 # UNIVERSAL LANGUAGE DETECTION & TRANSLATION ENGINE
@@ -102,14 +102,8 @@ Return JSON strictly:
 # ------------------------------------------------------------------------------
 def mask_pii_in_text(text: str) -> str:
     """
-    Globally masks personal identifiable information (PII) for candidates worldwide:
-    - Universal Emails & Handles
-    - Multi-Country Phone Formats
-    - Social Links & Websites
-    - Universal Government Identifiers (US SSN, IN PAN/Aadhaar, UK NIN, EU DNI/NIE, etc.)
-    - Global Postal / Zip Codes (US, UK Alphanumeric, EU 5-digit, IN 6-digit, etc.)
-    - Multi-Language Address Key-Values & Structural Street Patterns
-    - Demographics (DOB, Age, Gender, Marital Status, Religion, Nationality)
+    Globally masks personal identifiable information (PII) for candidates worldwide.
+    Executed AFTER deterministic timeline extraction so date ranges are never corrupted.
     """
     if not text:
         return ""
@@ -126,16 +120,16 @@ def mask_pii_in_text(text: str) -> str:
     text = re.sub(r'\b(?:linkedin\.com|github\.com|twitter\.com|facebook\.com|gitlab\.com)/[a-zA-Z0-9_\-/]+', '[REDACTED_URL]', text, flags=re.IGNORECASE)
 
     # 4. Universal Government IDs (US SSN, India PAN/Aadhaar, UK NIN, Generic National IDs)
-    text = re.sub(r'\b\d{3}-\d{2}-\d{4}\b', '[REDACTED_GOVT_ID]', text) # US SSN
-    text = re.sub(r'\b[A-Z]{5}\d{4}[A-Z]{1}\b', '[REDACTED_GOVT_ID]', text) # IN PAN Card
-    text = re.sub(r'\b\d{4}\s?\d{4}\s?\d{4}\b', '[REDACTED_GOVT_ID]', text) # IN Aadhaar
-    text = re.sub(r'\b[A-CEGHJ-PR-TW-Z]{1}[A-CEGHJ-NPR-TW-Z]{1}\s?\d{6}\s?[A-D]{1}\b', '[REDACTED_GOVT_ID]', text, flags=re.IGNORECASE) # UK NIN
-    text = re.sub(r'\b\d{8}[A-Z]{1}\b', '[REDACTED_GOVT_ID]', text, flags=re.IGNORECASE) # Spanish DNI
+    text = re.sub(r'\b\d{3}-\d{2}-\d{4}\b', '[REDACTED_GOVT_ID]', text)
+    text = re.sub(r'\b[A-Z]{5}\d{4}[A-Z]{1}\b', '[REDACTED_GOVT_ID]', text)
+    text = re.sub(r'\b\d{4}\s?\d{4}\s?\d{4}\b', '[REDACTED_GOVT_ID]', text)
+    text = re.sub(r'\b[A-CEGHJ-PR-TW-Z]{1}[A-CEGHJ-NPR-TW-Z]{1}\s?\d{6}\s?[A-D]{1}\b', '[REDACTED_GOVT_ID]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b\d{8}[A-Z]{1}\b', '[REDACTED_GOVT_ID]', text, flags=re.IGNORECASE)
 
     # 5. Universal Postal Codes (US Zip 5/9, UK Alphanumeric, EU 5-digit, IN 6-digit)
-    text = re.sub(r'\b[A-Z]{1,2}\d[A-Z0-9]?\s?\d[A-Z]{2}\b', '[REDACTED_ADDRESS]', text, flags=re.IGNORECASE) # UK Postcode
-    text = re.sub(r'\b\d{5}(?:-\d{4})?\b', '[REDACTED_ADDRESS]', text) # US Zip Code
-    text = re.sub(r'\b\d{6}\b', '[REDACTED_ADDRESS]', text) # IN/CN Zip Code
+    text = re.sub(r'\b[A-Z]{1,2}\d[A-Z0-9]?\s?\d[A-Z]{2}\b', '[REDACTED_ADDRESS]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b\d{5}(?:-\d{4})?\b', '[REDACTED_ADDRESS]', text)
+    text = re.sub(r'\b\d{6}\b', '[REDACTED_ADDRESS]', text)
 
     # 6. Multilingual Key-Value Address Masking
     address_keys = (
@@ -144,7 +138,7 @@ def mask_pii_in_text(text: str) -> str:
     )
     text = re.sub(rf'\b(?:{address_keys})\s*:\s*[^\n]+', '[REDACTED_ADDRESS]', text, flags=re.IGNORECASE)
 
-    # 7. Pattern-Based Structural Line Address Parser (Street, Ave, Blvd, Suite, Apt, Road, Way, etc.)
+    # 7. Pattern-Based Structural Line Address Parser
     lines = text.split('\n')
     masked_lines = []
     global_address_keywords = [
@@ -169,7 +163,7 @@ def mask_pii_in_text(text: str) -> str:
     # 8. Multilingual Candidate Name Masking
     text = re.sub(r'\b(?:Candidate Name|Full Name|Name|Nombre|Nombre Completo|Nom|Name des Kandidaten)\s*:\s*[A-Za-z\s.]+', '[REDACTED_NAME]', text, flags=re.IGNORECASE)
     
-    # 9. Multilingual Demographics Stripping (DOB, Age, Gender, Marital Status, Religion, Passport)
+    # 9. Multilingual Demographics Stripping
     text = re.sub(r'\b(?:DOB|Date of Birth|Birth Date|Fecha de Nacimiento|Geburtsdatum|Date de naissance)\s*:\s*[^\n]+', '[REDACTED_DEMOGRAPHIC]', text, flags=re.IGNORECASE)
     text = re.sub(r'\b(?:Age|Edad|Alter|Âge)\s*:\s*\d{1,2}\s*(?:years|yrs|años|jahre)?', '[REDACTED_DEMOGRAPHIC]', text, flags=re.IGNORECASE)
     text = re.sub(r'\b(?:Gender|Sex|Género|Sexo|Geschlecht)\s*:\s*(?:Male|Female|Other|M|F|Masculino|Femenino|Männlich|Weiblich)', '[REDACTED_DEMOGRAPHIC]', text, flags=re.IGNORECASE)
@@ -240,7 +234,7 @@ def format_time_gap(value):
         return str(value)
 
 # ------------------------------------------------------------------------------
-# UNIVERSAL DETERMINISTIC DATE PARSING & CALCULATION ENGINE
+# UNIVERSAL 100% DETERMINISTIC DATE PARSING & CALCULATION ENGINE
 # ------------------------------------------------------------------------------
 def parse_date_str(date_str):
     if not date_str:
@@ -251,38 +245,51 @@ def parse_date_str(date_str):
     if any(kw in date_str for kw in ["present", "current", "till date", "continuing", "now", "today", "actualidad", "presente", "hasta la fecha", "heute"]):
         return datetime.datetime.now()
     
+    # Match Month Name + 2 or 4 digit year (e.g., "Apr 24", "January 2022", "Mar. 2024")
     match = re.search(r'([a-z]+)\.?\s*[\'`]?(\d{2,4})', date_str)
     if match:
         month_str, year_str = match.groups()
         if len(year_str) == 2:
-            year_str = "20" + year_str
+            year_int = int(year_str)
+            year_str = f"19{year_str}" if year_int >= 70 else f"20{year_str}"
         try:
             month = 0
             month_lower = month_str[:3]
             months_list = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
             es_months = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
             de_months = ['jan', 'feb', 'mär', 'apr', 'mai', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dez']
+            fr_months = ['jan', 'fév', 'fev', 'mar', 'avr', 'mai', 'jui', 'juil', 'aoû', 'aou', 'sep', 'oct', 'nov', 'déc', 'dec']
+            
             if month_lower in months_list:
                 month = months_list.index(month_lower) + 1
             elif month_lower in es_months:
                 month = es_months.index(month_lower) + 1
             elif month_lower in de_months:
                 month = de_months.index(month_lower) + 1
+            elif month_lower in fr_months:
+                fr_map = {'jan': 1, 'fév': 2, 'fev': 2, 'mar': 3, 'avr': 4, 'mai': 5, 'jui': 6, 'juil': 7, 'aoû': 8, 'aou': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'déc': 12, 'dec': 12}
+                month = fr_map.get(month_lower, 0)
+                
             if month > 0:
                 return datetime.datetime(int(year_str), month, 1)
         except ValueError:
             pass
 
-    match_num = re.search(r'(\d{1,2})[/\-](\d{2,4})', date_str)
+    # Match Numeric MM/YYYY or MM-YYYY or MM.YYYY (e.g., "04/2024", "4/22")
+    match_num = re.search(r'(\d{1,2})[/\-\.](\d{2,4})', date_str)
     if match_num:
         m, y = match_num.groups()
         if len(y) == 2:
-            y = "20" + y
+            y_int = int(y)
+            y = f"19{y}" if y_int >= 70 else f"20{y}"
         try:
-            return datetime.datetime(int(y), int(m), 1)
+            m_int = int(m)
+            if 1 <= m_int <= 12:
+                return datetime.datetime(int(y), m_int, 1)
         except ValueError:
             pass
 
+    # Match Year-Only format (e.g., "2022")
     match_yr = re.search(r'\b(20\d{2}|19\d{2})\b', date_str)
     if match_yr:
         try:
@@ -294,9 +301,9 @@ def parse_date_str(date_str):
 
 def extract_experience_via_regex(text: str) -> float:
     patterns = [
-        r'(\d+(?:\.\d+)?)\+?\s*years?\s*(?:of)?\s*experience',
+        r'(\d+(?:\.\d+)?)\+?\s*years?\s*(?:of)?\s*(?:relevant|total|professional|work|industry)?\s*experience',
         r'experience\s*(?:of)?\s*(\d+(?:\.\d+)?)\+?\s*years?',
-        r'(\d+(?:\.\d+)?)\+?\s*yrs?',
+        r'(\d+(?:\.\d+)?)\+?\s*yrs?\s*(?:of)?\s*exp',
         r'(\d+(?:\.\d+)?)\+?\s*años?\s*(?:de)?\s*experiencia',
         r'(\d+(?:\.\d+)?)\+?\s*jahre?\s*(?:an)?\s*berufserfahrung'
     ]
@@ -310,136 +317,168 @@ def extract_experience_via_regex(text: str) -> float:
     return 0.0
 
 def calculate_deterministic_timeline(cv_text: str, groq_api_key: str = "") -> dict:
-    cleaned_cv = cv_text.replace("|", " ").replace("`", "").replace("'", "")
-    
-    work_periods = []
-    extracted_jobs = []
-    
-    if groq_api_key:
-        try:
-            client = Groq(api_key=groq_api_key.strip())
-            prompt = f"""
-Extract all professional work experience periods from this resume. 
-STRICTLY IGNORE education, degrees, diplomas, and certifications.
-For each job, specify if it is an internship (true/false).
-Return ONLY valid JSON format:
-[
-  {{"role": "Software Engineer", "company": "ABC", "start_date": "MM/YYYY", "end_date": "MM/YYYY or Present", "is_internship": false}}
-]
+    """
+    100% Deterministic, Multi-Format CV Timeline Calculator.
+    Zero LLM dependency for math -> Zero fluctuation across runs.
+    Strictly filters out Education, Certifications, Courses, and Projects.
+    """
+    # Standardize unicode dashes (–, —, −) to regular hyphen (-) and clean pipes
+    normalized_text = re.sub(r'[–—−]', '-', cv_text.replace("|", " "))
 
-RESUME TEXT:
-{cleaned_cv}
-"""
-            completion = client.chat.completions.create(
-                model=MODEL_VERSION,
-                messages=[{"role": "system", "content": "Extract structured work history JSON only."}, {"role": "user", "content": prompt}],
-                temperature=0.0,
-                max_tokens=800
-            )
-            content = completion.choices[0].message.content.strip()
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
-            extracted_jobs = json.loads(repair_json(content))
-        except Exception:
-            extracted_jobs = []
+    # Separate sections using major CV headings so Education, Certifications, and Projects never pollute Work Experience
+    section_pattern = re.compile(
+        r'(?:^|\n)\s*(?:#+\s*)?'
+        r'(WORK\s+EXPERIENCE|PROFESSIONAL\s+EXPERIENCE|EMPLOYMENT\s+HISTORY|EXPERIENCE|CAREER\s+HISTORY|WORK\s+HISTORY|'
+        r'EDUCATION|ACADEMIC|QUALIFICATIONS|CERTIFICATIONS|CERTIFICATES|LICENSES|COURSES|TRAINING|'
+        r'PROJECTS|KEY\s+PROJECTS|PERSONAL\s+PROJECTS|SKILLS|TECHNICAL\s+SKILLS|AWARDS|PUBLICATIONS)'
+        r'\s*(?::|\n|$)',
+        re.IGNORECASE
+    )
 
-    if extracted_jobs and isinstance(extracted_jobs, list):
-        for job in extracted_jobs:
-            start_dt = parse_date_str(job.get("start_date"))
-            end_dt = parse_date_str(job.get("end_date"))
-            is_intern = bool(job.get("is_internship", False))
-            
+    sections = {}
+    matches = list(section_pattern.finditer(normalized_text))
+
+    if matches:
+        # Text before the first detected header (Header / Professional Summary)
+        sections["HEADER"] = normalized_text[:matches[0].start()]
+        for i, m in enumerate(matches):
+            sec_title = m.group(1).upper()
+            start_pos = m.end()
+            end_pos = matches[i + 1].start() if i + 1 < len(matches) else len(normalized_text)
+            sec_body = normalized_text[start_pos:end_pos]
+
+            if any(k in sec_title for k in ["EXPERIENCE", "EMPLOYMENT", "CAREER", "WORK"]):
+                sections["WORK"] = sections.get("WORK", "") + "\n" + sec_body
+            elif any(k in sec_title for k in ["EDUCATION", "ACADEMIC", "QUALIFICATION"]):
+                sections["EDUCATION"] = sections.get("EDUCATION", "") + "\n" + sec_body
+            elif any(k in sec_title for k in ["CERTIFICAT", "LICENSE", "COURSE", "TRAINING", "PROJECT", "AWARD", "PUBLICATION"]):
+                sections["IGNORE"] = sections.get("IGNORE", "") + "\n" + sec_body
+    else:
+        # Fallback if CV has no standard section headers
+        sections["WORK"] = normalized_text
+
+    # Use strictly the WORK section if found; otherwise fallback to whole text minus known education/cert keywords
+    target_work_text = sections.get("WORK", "").strip()
+    if not target_work_text:
+        target_work_text = normalized_text
+
+    # Universal Multi-Format Date Range Regex:
+    # Supports: Apr '24 - Present, Jan 2022 - Mar 2024, 04/2022 - 10/2024, 4/22 - 10/24, 2020 - 2024
+    comprehensive_date_pattern = re.compile(
+        r'('
+        r'(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|ene|abr|ago|dic|mär|mai|okt|dez|fév|fev|avr|jui|juil|aoû|aou|déc)[a-z]*\.?\s*[\'`]?\d{2,4}|'
+        r'\b\d{1,2}[/\-\.]\d{2,4}\b|'
+        r'\b(?:19|20)\d{2}\b'
+        r')'
+        r'\s*(?:-|to|a|bis|till|until|through|au)\s*'
+        r'('
+        r'(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|ene|abr|ago|dic|mär|mai|okt|dez|fév|fev|avr|jui|juil|aoû|aou|déc)[a-z]*\.?\s*[\'`]?\d{2,4}|'
+        r'\b\d{1,2}[/\-\.]\d{2,4}\b|'
+        r'\b(?:19|20)\d{2}\b|'
+        r'present|current|till\s*date|now|today|continuing|actualidad|presente|heute|actuel'
+        r')',
+        re.IGNORECASE
+    )
+
+    ft_periods = []
+    in_periods = []
+
+    edu_and_cert_exclusions = [
+        'b.tech', 'b.e', 'm.tech', 'b.sc', 'm.sc', 'bca', 'mca', 'mba', 'ph.d', 'phd',
+        'bachelor', 'master', 'degree', 'diploma', 'cgpa', 'gpa', 'university', 'college',
+        'school', 'hsc', 'ssc', 'certified', 'certification', 'certificate', 'credential',
+        'license', 'course', 'bootcamp', 'udemy', 'coursera', 'edx', 'aws certified', 'azure certified'
+    ]
+
+    internship_keywords = [
+        'intern', 'trainee', 'internship', 'apprentic', 'pasante', 'practicante', 'praktikant', 'stagiaire'
+    ]
+
+    lines = target_work_text.split('\n')
+    for idx, line in enumerate(lines):
+        line_lower = line.lower()
+        context_block = " ".join(lines[max(0, idx - 2): min(len(lines), idx + 2)]).lower()
+
+        # Strictly exclude any line/block referencing education or external certifications
+        if any(excl in line_lower for excl in edu_and_cert_exclusions):
+            continue
+
+        matches_in_line = comprehensive_date_pattern.findall(line)
+        for start_str, end_str in matches_in_line:
+            start_dt = parse_date_str(start_str)
+            end_dt = parse_date_str(end_str)
+
+            # If year-only end date (e.g., "2020 - 2022"), set end month to December for accurate full-year span
+            if end_dt and re.fullmatch(r'(?:19|20)\d{2}', end_str.strip()):
+                end_dt = datetime.datetime(end_dt.year, 12, 1)
+
             if start_dt and end_dt and start_dt <= end_dt:
                 months = (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
                 if 0 < months <= 600:
-                    if is_intern:
-                        work_periods.append((start_dt, end_dt, "internship"))
+                    if any(kw in context_block for kw in internship_keywords):
+                        in_periods.append((start_dt, end_dt))
                     else:
-                        work_periods.append((start_dt, end_dt, "fulltime"))
-
-    if not work_periods:
-        lines = cleaned_cv.split('\n')
-        for line_idx, line in enumerate(lines):
-            line_lower = line.lower()
-            if any(kw in line_lower for kw in ['b.tech', 'b.e', 'm.tech', 'b.sc', 'm.sc', 'bca', 'mca', 'mba', 'graduation', 'degree', 'cgpa', 'college', 'university', 'school', 'education', 'hsc', 'ssc', 'diploma', 'licenciatura', 'ingenieria', 'universidad', 'ausbildung', 'studium']):
-                continue
-
-            parts = re.split(r'\s*(?:–|-|to|a)\s*', line, flags=re.IGNORECASE)
-            if len(parts) >= 2:
-                for i in range(len(parts) - 1):
-                    start_dt = parse_date_str(parts[i])
-                    end_dt = parse_date_str(parts[i+1])
-                    if start_dt and end_dt and start_dt <= end_dt:
-                        months = (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
-                        if 0 < months <= 600:
-                            context_block = " ".join(lines[max(0, line_idx - 2): line_idx + 1]).lower()
-                            if any(kw in context_block for kw in ["intern", "trainee", "internship", "apprentic", "pasante", "practicante", "praktikant"]):
-                                work_periods.append((start_dt, end_dt, "internship"))
-                            else:
-                                work_periods.append((start_dt, end_dt, "fulltime"))
-
-    work_periods = sorted(work_periods, key=lambda x: x[0])
-    
-    ft_periods = [p for p in work_periods if p[2] == "fulltime"]
-    in_periods = [p for p in work_periods if p[2] == "internship"]
+                        ft_periods.append((start_dt, end_dt))
 
     def merge_intervals(intervals):
-        merged = []
-        for start, end, ptype in intervals:
-            if not merged:
-                merged.append([start, end, ptype])
+        if not intervals:
+            return []
+        intervals = sorted(intervals, key=lambda x: x[0])
+        merged = [list(intervals[0])]
+        for start, end in intervals[1:]:
+            if start <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], end)
             else:
-                prev_start, prev_end, _ = merged[-1]
-                if start <= prev_end:
-                    merged[-1][1] = max(prev_end, end)
-                else:
-                    merged.append([start, end, ptype])
+                merged.append([start, end])
         return merged
 
     merged_ft = merge_intervals(ft_periods)
     merged_in = merge_intervals(in_periods)
 
-    fulltime_months = sum((end.year - start.year) * 12 + (end.month - start.month) + 1 for start, end, _ in merged_ft)
-    internship_months = sum((end.year - start.year) * 12 + (end.month - start.month) + 1 for start, end, _ in merged_in)
+    ft_months = sum((e.year - s.year) * 12 + (e.month - s.month) + 1 for s, e in merged_ft)
+    in_months = sum((e.year - s.year) * 12 + (e.month - s.month) + 1 for s, e in merged_in)
 
+    total_years = round(ft_months / 12.0, 1)
+    intern_years = round(in_months / 12.0, 1)
+
+    # Ultimate Fallback: If no work date ranges exist in CV, extract stated experience from Summary/Header
+    if total_years == 0.0:
+        summary_text = sections.get("HEADER", "") + "\n" + target_work_text
+        total_years = extract_experience_via_regex(summary_text)
+
+    # Experience Gaps Calculation
     exp_gaps = []
     for i in range(len(merged_ft) - 1):
-        current_end = merged_ft[i][1]
-        next_start = merged_ft[i+1][0]
-        if next_start > current_end:
-            gap_months = (next_start.year - current_end.year) * 12 + (next_start.month - current_end.month) - 1
-            if gap_months >= 1:
-                exp_gaps.append(f"Gap of {gap_months} months between {current_end.strftime('%b %Y')} and {next_start.strftime('%b %Y')}")
+        curr_end = merged_ft[i][1]
+        next_start = merged_ft[i + 1][0]
+        if next_start > curr_end:
+            gap_m = (next_start.year - curr_end.year) * 12 + (next_start.month - curr_end.month) - 1
+            if gap_m >= 2:
+                exp_gaps.append(f"Gap of {gap_m} months between {curr_end.strftime('%b %Y')} and {next_start.strftime('%b %Y')}")
 
     if not exp_gaps:
         exp_gaps = ["No major experience gaps found"]
 
-    calculated_total_years = round(fulltime_months / 12.0, 1)
-    internship_years = round(internship_months / 12.0, 1)
-
-    if calculated_total_years == 0.0:
-        calculated_total_years = extract_experience_via_regex(cv_text)
-
+    # Education-to-Job Transition Gap Calculation
     edu_end_date = None
-    edu_pos = cleaned_cv.lower().find('education')
-    if edu_pos == -1:
-        edu_pos = cleaned_cv.lower().find('educación')
-    if edu_pos == -1:
-        edu_pos = cleaned_cv.lower().find('ausbildung')
-    if edu_pos != -1:
-        edu_subtext = cleaned_cv[edu_pos:edu_pos + 600]
-        sub_ranges = re.findall(r'([A-Za-z0-9\/\-\.\s]{3,12})\s*(?:–|-|to|a)+\s*([A-Za-z0-9\/\-\.\s]{3,12})', edu_subtext, re.IGNORECASE)
-        if sub_ranges:
-            edu_end_date = parse_date_str(sub_ranges[0][1])
+    edu_text = sections.get("EDUCATION", "")
+    if edu_text:
+        edu_ranges = comprehensive_date_pattern.findall(edu_text)
+        edu_end_dates = []
+        for _, e_str in edu_ranges:
+            e_dt = parse_date_str(e_str)
+            if e_dt:
+                edu_end_dates.append(e_dt)
+        if edu_end_dates:
+            edu_end_date = max(edu_end_dates)
 
     education_to_job_gap_str = "0 Months (Seamless)"
-    if edu_end_date and merged_ft:
-        first_work_start = merged_ft[0][0]
+    all_work_starts = [s for s, _ in merged_ft] + [s for s, _ in merged_in]
+    if edu_end_date and all_work_starts:
+        first_work_start = min(all_work_starts)
         if first_work_start > edu_end_date:
-            total_gap_months = (first_work_start.year - edu_end_date.year) * 12 + (first_work_start.month - edu_end_date.month)
-            if total_gap_months > 0:
+            total_gap_months = (first_work_start.year - edu_end_date.year) * 12 + (first_work_start.month - edu_end_date.month) - 1
+            if total_gap_months >= 2:
                 years = total_gap_months // 12
                 months = total_gap_months % 12
                 parts = []
@@ -447,12 +486,12 @@ RESUME TEXT:
                     parts.append(f"{years} {'Year' if years == 1 else 'Years'}")
                 if months > 0:
                     parts.append(f"{months} {'Month' if months == 1 else 'Months'}")
-                education_to_job_gap_str = " ".join(parts) if parts else "0 Months"
+                education_to_job_gap_str = " ".join(parts) if parts else "0 Months (Seamless)"
 
     return {
-        "internship_experience_years": internship_years,
-        "fulltime_experience_years": calculated_total_years,
-        "total_experience_years": calculated_total_years,
+        "internship_experience_years": intern_years,
+        "fulltime_experience_years": total_years,
+        "total_experience_years": total_years,
         "experience_gaps": exp_gaps,
         "education_gaps": ["No education gaps found"],
         "education_to_job_gap": education_to_job_gap_str
@@ -470,7 +509,7 @@ def extract_text_with_ocr(uploaded_file) -> str:
     if file_ext == 'pdf':
         doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
         for page in doc:
-            page_text = page.get_text()
+            page_text = page.get_text("text")
             if len(page_text.strip()) < 20 and HAS_OCR:
                 pix = page.get_pixmap()
                 img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
@@ -479,7 +518,15 @@ def extract_text_with_ocr(uploaded_file) -> str:
         return text
     elif file_ext == 'docx':
         doc = docx.Document(uploaded_file)
-        return "\n".join([para.text for para in doc.paragraphs])
+        paragraphs_text = [para.text for para in doc.paragraphs if para.text.strip()]
+        # Also extract text from tables in DOCX resumes (common in multi-column templates)
+        tables_text = []
+        for table in doc.tables:
+            for row in table.rows:
+                row_vals = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                if row_vals:
+                    tables_text.append(" | ".join(row_vals))
+        return "\n".join(paragraphs_text + tables_text)
     elif file_ext == 'txt':
         return uploaded_file.read().decode('utf-8', errors='ignore')
     elif file_ext in ['png', 'jpg', 'jpeg'] and HAS_OCR:
@@ -582,7 +629,7 @@ def generate_in_memory_word_report(candidate_name, recruiter_id, overall_score, 
 st.set_page_config(page_title="Universal Enterprise Candidate Evaluator", layout="wide")
 
 st.title("⚡ Universal Enterprise Candidate Evaluation System")
-st.caption("Multilingual Auto-Translation Engine + Global PII Protection + Contextual Gap Guardrails")
+st.caption("100% Consistent Deterministic Timeline Engine + Global PII Protection + Multilingual Support")
 
 if "custom_rules" not in st.session_state:
     st.session_state.custom_rules = [
@@ -632,7 +679,7 @@ with st.sidebar:
     else:
         st.success("✅ Groq API Key loaded securely from Secrets")
         
-    st.info(f"Model: {MODEL_VERSION}\nLogic: {LOGIC_VERSION}\nMultilingual: All Languages Auto-Translate")
+    st.info(f"Model: {MODEL_VERSION}\nLogic: {LOGIC_VERSION}\nTimeline: 100% Deterministic Regex")
 
 # Section 1: Inputs
 st.markdown("### 1. Inputs (Job Description & Candidate Resume)")
@@ -783,7 +830,7 @@ Return ONLY valid JSON:
         completion = client.chat.completions.create(
             model=MODEL_VERSION,
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-            temperature=0.1,
+            temperature=0.0,
             max_tokens=1000
         )
         content = completion.choices[0].message.content.strip()
@@ -864,13 +911,15 @@ def evaluate_hybrid_system_batched(cv_text, jd_text, rules_list, groq_api_key):
     translated_cv, detected_cv_lang = detect_and_translate_to_english(cv_text, groq_api_key)
     translated_jd, detected_jd_lang = detect_and_translate_to_english(jd_text, groq_api_key)
 
-    masked_cv_text = mask_pii_in_text(translated_cv)
-
-    jd_analysis = extract_jd_requirements(translated_jd, groq_api_key)
-    profile_details = calculate_deterministic_timeline(masked_cv_text, groq_api_key)
+    # 1. Calculate deterministic timeline BEFORE PII masking so dates are never corrupted
+    profile_details = calculate_deterministic_timeline(translated_cv)
     profile_details["detected_cv_language"] = detected_cv_lang
     profile_details["detected_jd_language"] = detected_jd_lang
 
+    # 2. Apply PII masking for LLM evaluation & storage
+    masked_cv_text = mask_pii_in_text(translated_cv)
+
+    jd_analysis = extract_jd_requirements(translated_jd, groq_api_key)
     evidence_map = extract_universal_evidence(masked_cv_text)
     det_analysis = profile_details
 
@@ -913,7 +962,7 @@ if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_con
     elif not cv_text or not jd_text:
         st.warning("Please provide both JD and Candidate Resume.")
     else:
-        with st.spinner("Running PII-protected evaluation matrix..."):
+        with st.spinner("Running PII-protected deterministic evaluation matrix..."):
             cv_name = "Anonymized_CV"
             jd_name = jd_file.name if (jd_file and hasattr(jd_file, 'name')) else "Pasted JD Text"
             anonymized_candidate_name = f"Candidate_{abs(hash(candidate_name)) % 10000}"
