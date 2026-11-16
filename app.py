@@ -44,6 +44,7 @@ def detect_and_translate_to_english(text: str, groq_api_key: str) -> tuple[str, 
         "You are an expert multilingual document translator and language detector. "
         "Analyze the input text. Detect its primary language. "
         "If the text is NOT in English, translate it accurately to professional English, maintaining all numbers, dates, technical skills, job titles, and formatting context. "
+        "CRITICAL INSTRUCTION FOR SECTION HEADERS: Always translate and standardize resume section headers/titles into standard English uppercase (e.g., translate 'EDUCACIÓN' or 'ESTUDIOS' to 'EDUCATION', 'PROYECTOS' or 'PROYECTOS ACADÉMICOS' to 'PROJECTS', 'RESUMEN' to 'SUMMARY', 'HABILIDADES' to 'SKILLS') so that automated timeline parsers can recognize them correctly. "
         "If the text is already in English, return it unchanged. "
         "Return ONLY valid JSON matching this schema: {\"detected_language\": \"Spanish\", \"translated_text\": \"...\"}"
     )
