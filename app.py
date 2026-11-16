@@ -913,7 +913,7 @@ if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_con
     elif not cv_text or not jd_text:
         st.warning("Please provide both JD and Candidate Resume.")
     else:
-        with st.spinner("Running multilingual auto-translation & PII-protected evaluation matrix..."):
+        with st.spinner("Running PII-protected evaluation matrix..."):
             cv_name = "Anonymized_CV"
             jd_name = jd_file.name if (jd_file and hasattr(jd_file, 'name')) else "Pasted JD Text"
             anonymized_candidate_name = f"Candidate_{abs(hash(candidate_name)) % 10000}"
