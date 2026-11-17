@@ -24,7 +24,30 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v18.2-Universal-Semantic-Extraction-Locked-Button"
+LOGIC_VERSION = "v18.3-Universal-Semantic-Extraction-Hybrid-PII-Security"
+
+# ------------------------------------------------------------------------------
+# PRE-TRANSLATION LANGUAGE-INDEPENDENT PII MASKING (SECURITY LAYER 1)
+# ------------------------------------------------------------------------------
+def mask_language_independent_pii(text: str) -> str:
+    """Masks emails, phones, URLs, and govt IDs locally before sending text to LLM."""
+    if not text:
+        return ""
+    # Email masking
+    text = re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b', '[REDACTED_EMAIL]', text)
+    # Phone number masking
+    text = re.sub(r'\b(?:\+\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}\b', '[REDACTED_PHONE]', text)
+    text = re.sub(r'\[REDACTED_PHONE\](?:\s*[\/\-,]\s*\[REDACTED_PHONE\])+', '[REDACTED_PHONE]', text)
+    # URL & Social links masking
+    text = re.sub(r'https?://(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)', '[REDACTED_URL]', text)
+    text = re.sub(r'\b(?:linkedin\.com|github\.com|twitter\.com|facebook\.com|gitlab\.com)/[a-zA-Z0-9_\-/]+', '[REDACTED_URL]', text, flags=re.IGNORECASE)
+    # Government IDs (SSN, PAN, Aadhaar, UK NINO, etc.)
+    text = re.sub(r'\b\d{3}-\d{2}-\d{4}\b', '[REDACTED_GOVT_ID]', text)
+    text = re.sub(r'\b[A-Z]{5}\d{4}[A-Z]{1}\b', '[REDACTED_GOVT_ID]', text)
+    text = re.sub(r'\b\d{4}\s?\d{4}\s?\d{4}\b', '[REDACTED_GOVT_ID]', text)
+    text = re.sub(r'\b[A-CEGHJ-PR-TW-Z]{1}[A-CEGHJ-NPR-TW-Z]{1}\s?\d{6}\s?[A-D]{1}\b', '[REDACTED_GOVT_ID]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b\d{8}[A-Z]{1}\b', '[REDACTED_GOVT_ID]', text, flags=re.IGNORECASE)
+    return text
 
 # ------------------------------------------------------------------------------
 # FAST LANGUAGE PRE-CHECK (TO SHOW TRANSLATION SPINNER ONLY WHEN NEEDED)
@@ -83,6 +106,7 @@ def translate_and_extract_cv_structure(text: str, groq_api_key: str) -> tuple[st
         "1) Detect the document's primary language and translate the entire text accurately into English. "
         "2) Extract structured timeline intervals into strict JSON. "
         "CRITICAL EXTRACTION & NORMALIZATION RULES: "
+        "- Preserve any existing redaction tokens like [REDACTED_EMAIL], [REDACTED_PHONE], [REDACTED_URL], [REDACTED_GOVT_ID] intact without altering them. "
         "- Translate all foreign month abbreviations (e.g., 'Ago' for August, 'Fév' for February) into standard English abbreviations ('Aug', 'Feb') or numeric format before parsing. "
         "- Normalize all start and end dates strictly to 'MM/YYYY' or 'YYYY' format, and use 'Present' for ongoing roles/studies. "
         "- 'fulltime_roles': Include ONLY paid, formal full-time or contract employment at a company/organization. "
@@ -134,7 +158,7 @@ Return ONLY valid JSON matching this exact schema:
         translated_text = parsed.get("translated_text", text)
 
         if len(text) > 6000 and "english" not in detected_lang.lower():
-            full_prompt = f"Translate the following {detected_lang} document to English. Output ONLY the translated text:\n\n{text}"
+            full_prompt = f"Translate the following {detected_lang} document to English, preserving any [REDACTED_*] tokens. Output ONLY the translated text:\n\n{text}"
             full_completion = client.chat.completions.create(
                 model=MODEL_VERSION,
                 messages=[
@@ -190,21 +214,14 @@ def detect_and_translate_jd(text: str, groq_api_key: str) -> tuple[str, str]:
         return text, "English (Fallback)"
 
 # ------------------------------------------------------------------------------
-# GLOBAL PII ANONYMIZATION & MASKING ENGINE (ENGLISH ONLY)
+# POST-TRANSLATION PII ANONYMIZATION & MASKING ENGINE (SECURITY LAYER 2 - ENGLISH)
 # ------------------------------------------------------------------------------
 def mask_pii_in_text(text: str) -> str:
+    """Performs deep semantic & linguistic PII masking after English translation."""
     if not text:
         return ""
-    text = re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b', '[REDACTED_EMAIL]', text)
-    text = re.sub(r'\b(?:\+\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}\b', '[REDACTED_PHONE]', text)
-    text = re.sub(r'\[REDACTED_PHONE\](?:\s*[\/\-,]\s*\[REDACTED_PHONE\])+', '[REDACTED_PHONE]', text)
-    text = re.sub(r'https?://(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)', '[REDACTED_URL]', text)
-    text = re.sub(r'\b(?:linkedin\.com|github\.com|twitter\.com|facebook\.com|gitlab\.com)/[a-zA-Z0-9_\-/]+', '[REDACTED_URL]', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b\d{3}-\d{2}-\d{4}\b', '[REDACTED_GOVT_ID]', text)
-    text = re.sub(r'\b[A-Z]{5}\d{4}[A-Z]{1}\b', '[REDACTED_GOVT_ID]', text)
-    text = re.sub(r'\b\d{4}\s?\d{4}\s?\d{4}\b', '[REDACTED_GOVT_ID]', text)
-    text = re.sub(r'\b[A-CEGHJ-PR-TW-Z]{1}[A-CEGHJ-NPR-TW-Z]{1}\s?\d{6}\s?[A-D]{1}\b', '[REDACTED_GOVT_ID]', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b\d{8}[A-Z]{1}\b', '[REDACTED_GOVT_ID]', text, flags=re.IGNORECASE)
+    text = mask_language_independent_pii(text)
+    
     text = re.sub(r'\b[A-Z]{1,2}\d[A-Z0-9]?\s?\d[A-Z]{2}\b', '[REDACTED_ADDRESS]', text, flags=re.IGNORECASE)
     text = re.sub(r'\b\d{5}(?:-\d{4})?\b', '[REDACTED_ADDRESS]', text)
     text = re.sub(r'\b\d{6}\b', '[REDACTED_ADDRESS]', text)
@@ -628,7 +645,7 @@ def apply_fully_dynamic_guardrails(jd_analysis, det_analysis, combined_rule_eval
 st.set_page_config(page_title="Universal Enterprise Candidate Evaluator", layout="wide")
 
 st.title("⚡ Universal Enterprise Candidate Evaluation System")
-st.caption("100% Universal Semantic Extraction + Deterministic Math Engine + Global PII Protection")
+st.caption("100% Universal Semantic Extraction + Deterministic Math Engine + Hybrid PII Protection")
 
 # Initialize Session State
 if "custom_rules" not in st.session_state:
@@ -819,23 +836,27 @@ with step4:
             cand_name_input = st.session_state.candidate_name_val
             jd_name = st.session_state.jd_name_val
 
+            # 🔒 SECURITY LAYER 1: Pre-mask language-independent PII (Emails, Phones, URLs, Govt IDs) locally before API call
+            pre_masked_cv = mask_language_independent_pii(raw_cv)
+            pre_masked_jd = mask_language_independent_pii(raw_jd)
+
             # 1. Fast Language Detection Check
-            cv_lang_check = detect_language_fast(raw_cv, groq_api_key)
-            jd_lang_check = detect_language_fast(raw_jd, groq_api_key)
+            cv_lang_check = detect_language_fast(pre_masked_cv, groq_api_key)
+            jd_lang_check = detect_language_fast(pre_masked_jd, groq_api_key)
             is_non_english = ("english" not in cv_lang_check.lower()) or ("english" not in jd_lang_check.lower())
 
-            # 2. Conditional Translation Spinner
+            # 2. Conditional Translation Spinner (using pre-masked text)
             if is_non_english:
                 with st.spinner(f"🌐 Non-English document detected ({cv_lang_check} / {jd_lang_check}). Language translation in progress..."):
-                    translated_cv, detected_cv_lang, timeline_data = translate_and_extract_cv_structure(raw_cv, groq_api_key)
-                    translated_jd, detected_jd_lang = detect_and_translate_jd(raw_jd, groq_api_key)
+                    translated_cv, detected_cv_lang, timeline_data = translate_and_extract_cv_structure(pre_masked_cv, groq_api_key)
+                    translated_jd, detected_jd_lang = detect_and_translate_jd(pre_masked_jd, groq_api_key)
             else:
                 with st.spinner("⚙️ Extracting structured timelines and running deterministic evaluation..."):
-                    translated_cv, detected_cv_lang, timeline_data = translate_and_extract_cv_structure(raw_cv, groq_api_key)
-                    translated_jd, detected_jd_lang = raw_jd, "English"
+                    translated_cv, detected_cv_lang, timeline_data = translate_and_extract_cv_structure(pre_masked_cv, groq_api_key)
+                    translated_jd, detected_jd_lang = pre_masked_jd, "English"
 
-            # 3. Deterministic Math & PII Masking
-            with st.spinner("🔒 Masking PII and calculating deterministic career metrics..."):
+            # 🔒 SECURITY LAYER 2: Post-Translation Semantic PII Masking & Deterministic Math
+            with st.spinner("🔒 Masking remaining linguistic PII and calculating deterministic career metrics..."):
                 det_analysis = calculate_deterministic_timeline(timeline_data)
                 det_analysis["detected_cv_language"] = detected_cv_lang
                 det_analysis["detected_jd_language"] = detected_jd_lang
