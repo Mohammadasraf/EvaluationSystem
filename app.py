@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v18.1-Universal-Semantic-Extraction-English-Normalized"
+LOGIC_VERSION = "v18.2-Universal-Semantic-Extraction-Locked-Button"
 
 # ------------------------------------------------------------------------------
 # FAST LANGUAGE PRE-CHECK (TO SHOW TRANSLATION SPINNER ONLY WHEN NEEDED)
@@ -649,6 +649,14 @@ if "form_reset_counter" not in st.session_state:
 if "rule_form_reset_counter" not in st.session_state:
     st.session_state.rule_form_reset_counter = 0
 
+# Evaluation locking states
+if "eval_completed" not in st.session_state:
+    st.session_state.eval_completed = False
+if "last_evaluated_jd" not in st.session_state:
+    st.session_state.last_evaluated_jd = ""
+if "last_evaluated_cv" not in st.session_state:
+    st.session_state.last_evaluated_cv = ""
+
 # Sidebar Security & Credentials
 with st.sidebar:
     st.header("🔐 Security & Credentials")
@@ -777,22 +785,37 @@ with step3:
 with step4:
     st.subheader("Step 4: Run Evaluation & View Results")
     
-    jd_ready = bool(st.session_state.get("jd_text_val", "").strip())
-    cv_ready = bool(st.session_state.get("cv_text_val", "").strip())
+    current_jd = st.session_state.get("jd_text_val", "").strip()
+    current_cv = st.session_state.get("cv_text_val", "").strip()
+    
+    jd_ready = bool(current_jd)
+    cv_ready = bool(current_cv)
+    
+    # Check if evaluation has already been completed for the current input
+    is_same_input = (
+        st.session_state.eval_completed
+        and current_jd == st.session_state.last_evaluated_jd
+        and current_cv == st.session_state.last_evaluated_cv
+    )
     
     col_chk1, col_chk2, col_chk3 = st.columns(3)
     col_chk1.metric("Step 1: JD Status", "✅ Ready" if jd_ready else "⚠️ Missing")
     col_chk2.metric("Step 2: CV Status", "✅ Ready" if cv_ready else "⚠️ Missing")
     col_chk3.metric("Step 3: Active Rules", f"{len(st.session_state.custom_rules)} Rules")
 
-    if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_container_width=True):
+    if is_same_input:
+        st.info("🔒 Evaluation already completed for this exact JD & CV. Upload or paste a new JD/CV in Step 1 & 2 to re-enable the button.")
+
+    btn_disabled = (not jd_ready) or (not cv_ready) or is_same_input
+
+    if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_container_width=True, disabled=btn_disabled):
         if not groq_api_key:
             st.error("❌ Groq API Key is required in the sidebar.")
         elif not cv_ready or not jd_ready:
             st.warning("⚠️ Please complete Step 1 (JD) and Step 2 (Candidate Resume) first.")
         else:
-            raw_cv = st.session_state.cv_text_val
-            raw_jd = st.session_state.jd_text_val
+            raw_cv = current_cv
+            raw_jd = current_jd
             cand_name_input = st.session_state.candidate_name_val
             jd_name = st.session_state.jd_name_val
 
@@ -887,6 +910,12 @@ with step4:
                     "summary": summary_text,
                     "word_file_io": word_file_io
                 }
+                
+                # Lock button for current inputs
+                st.session_state.eval_completed = True
+                st.session_state.last_evaluated_jd = raw_jd
+                st.session_state.last_evaluated_cv = raw_cv
+                
                 st.session_state.form_reset_counter += 1
                 st.success("✅ Evaluation completed!")
                 st.rerun()
