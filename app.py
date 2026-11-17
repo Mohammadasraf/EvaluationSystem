@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 DB_PATH = "candidate_evaluator.db"
 MODEL_VERSION = "openai/gpt-oss-20b"
-LOGIC_VERSION = "v18.0-Universal-Semantic-Extraction-Deterministic-Math"
+LOGIC_VERSION = "v18.1-Universal-Semantic-Extraction-English-Normalized"
 
 # ------------------------------------------------------------------------------
 # FAST LANGUAGE PRE-CHECK (TO SHOW TRANSLATION SPINNER ONLY WHEN NEEDED)
@@ -82,11 +82,12 @@ def translate_and_extract_cv_structure(text: str, groq_api_key: str) -> tuple[st
         "Your job is to: "
         "1) Detect the document's primary language and translate the entire text accurately into English. "
         "2) Extract structured timeline intervals into strict JSON. "
-        "CRITICAL EXTRACTION RULES (APPLIES TO ALL LANGUAGES): "
+        "CRITICAL EXTRACTION & NORMALIZATION RULES: "
+        "- Translate all foreign month abbreviations (e.g., 'Ago' for August, 'Fév' for February) into standard English abbreviations ('Aug', 'Feb') or numeric format before parsing. "
+        "- Normalize all start and end dates strictly to 'MM/YYYY' or 'YYYY' format, and use 'Present' for ongoing roles/studies. "
         "- 'fulltime_roles': Include ONLY paid, formal full-time or contract employment at a company/organization. "
         "- 'internship_roles': Include ONLY formal internships, apprenticeships, or industrial traineeships. "
         "- STRICT EXCLUSIONS: NEVER include university degrees, master's/bachelor's programs, academic projects, personal projects, hackathons, awards, or certifications in 'fulltime_roles' or 'internship_roles'. Put degrees/studies ONLY in 'education_entries'. "
-        "- Normalize all dates to 'MM/YYYY' or 'YYYY' format, and use 'Present' for ongoing roles/studies. "
         "Return ONLY valid JSON."
     )
 
@@ -189,7 +190,7 @@ def detect_and_translate_jd(text: str, groq_api_key: str) -> tuple[str, str]:
         return text, "English (Fallback)"
 
 # ------------------------------------------------------------------------------
-# GLOBAL PII ANONYMIZATION & MASKING ENGINE
+# GLOBAL PII ANONYMIZATION & MASKING ENGINE (ENGLISH ONLY)
 # ------------------------------------------------------------------------------
 def mask_pii_in_text(text: str) -> str:
     if not text:
@@ -208,10 +209,7 @@ def mask_pii_in_text(text: str) -> str:
     text = re.sub(r'\b\d{5}(?:-\d{4})?\b', '[REDACTED_ADDRESS]', text)
     text = re.sub(r'\b\d{6}\b', '[REDACTED_ADDRESS]', text)
 
-    address_keys = (
-        r'Address|Location|Residing at|Residential Address|Permanent Address|Current Address|'
-        r'Dirección|Ubicación|Domicilio|Adresse|Wohnort|Anschrift|Indirizzo|Endereço'
-    )
+    address_keys = r'Address|Location|Residing at|Residential Address|Permanent Address|Current Address'
     text = re.sub(rf'\b(?:{address_keys})\s*:\s*[^\n]+', '[REDACTED_ADDRESS]', text, flags=re.IGNORECASE)
 
     lines = text.split('\n')
@@ -219,9 +217,7 @@ def mask_pii_in_text(text: str) -> str:
     global_address_keywords = [
         'street', 'st.', 'avenue', 'ave', 'boulevard', 'blvd', 'road', 'rd.', 'lane', 'ln.', 
         'drive', 'dr.', 'way', 'court', 'ct.', 'suite', 'ste', 'apartment', 'apt', 'building',
-        'bldg', 'flat', 'floor', 'house no', 'plot no', 'block no', 'postal', 'zip code',
-        'calle', 'carrera', 'avenida', 'barrio', 'piso', 'departamento', 'straße', 'strasse',
-        'hausnummer', 'postleitzahl', 'rue', 'via', 'rua'
+        'bldg', 'flat', 'floor', 'house no', 'plot no', 'block no', 'postal', 'zip code'
     ]
     for line in lines:
         line_lower = line.lower()
@@ -231,13 +227,13 @@ def mask_pii_in_text(text: str) -> str:
             masked_lines.append(line)
     text = '\n'.join(masked_lines)
     text = re.sub(r'(\[REDACTED_ADDRESS\]\s*[\/\-,]\s*)+', '[REDACTED_ADDRESS] ', text)
-    text = re.sub(r'\b(?:Candidate Name|Full Name|Name|Nombre|Nombre Completo|Nom|Name des Kandidaten)\s*:\s*[A-Za-z\s.]+', '[REDACTED_NAME]', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(?:DOB|Date of Birth|Birth Date|Fecha de Nacimiento|Geburtsdatum|Date de naissance)\s*:\s*[^\n]+', '[REDACTED_DEMOGRAPHIC]', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(?:Age|Edad|Alter|Âge)\s*:\s*\d{1,2}\s*(?:years|yrs|años|jahre)?', '[REDACTED_DEMOGRAPHIC]', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(?:Gender|Sex|Género|Sexo|Geschlecht)\s*:\s*(?:Male|Female|Other|M|F|Masculino|Femenino|Männlich|Weiblich)', '[REDACTED_DEMOGRAPHIC]', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(?:Marital Status|Estado Civil|Familienstand)\s*:\s*(?:Single|Married|Unmarried|Divorced|Soltero|Casado|Divorciado|Ledig|Verheiratet)', '[REDACTED_DEMOGRAPHIC]', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(?:Passport No|Passport Number|Pasaporte|Reisepassnummer)\s*:\s*[A-Z0-9]+', '[REDACTED_GOVT_ID]', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(?:Nationality|Nacionalidad|Nationalität|Nationalité)\s*:\s*[A-Za-z\s]+', '[REDACTED_DEMOGRAPHIC]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:Candidate Name|Full Name|Name)\s*:\s*[A-Za-z\s.]+', '[REDACTED_NAME]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:DOB|Date of Birth|Birth Date)\s*:\s*[^\n]+', '[REDACTED_DEMOGRAPHIC]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:Age)\s*:\s*\d{1,2}\s*(?:years|yrs)?', '[REDACTED_DEMOGRAPHIC]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:Gender|Sex)\s*:\s*(?:Male|Female|Other|M|F)', '[REDACTED_DEMOGRAPHIC]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:Marital Status)\s*:\s*(?:Single|Married|Unmarried|Divorced)', '[REDACTED_DEMOGRAPHIC]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:Passport No|Passport Number)\s*:\s*[A-Z0-9]+', '[REDACTED_GOVT_ID]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:Nationality)\s*:\s*[A-Za-z\s]+', '[REDACTED_DEMOGRAPHIC]', text, flags=re.IGNORECASE)
     return text
 
 # ------------------------------------------------------------------------------
@@ -297,7 +293,7 @@ def parse_date_str(date_str: str, is_end: bool = False):
     if not date_str:
         return None
     date_str = str(date_str).replace("'", "").replace("`", "").strip().lower()
-    if any(kw in date_str for kw in ["present", "current", "till date", "continuing", "now", "today", "actualidad", "actual", "presente", "hasta la fecha", "heute"]):
+    if any(kw in date_str for kw in ["present", "current", "till date", "continuing", "now", "today"]):
         return datetime.datetime.now()
     
     match = re.search(r'([a-z]+)\.?\s*[\'`]?(\d{2,4})', date_str)
@@ -310,18 +306,8 @@ def parse_date_str(date_str: str, is_end: bool = False):
             month = 0
             month_lower = month_str[:3]
             months_list = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
-            es_months = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
-            de_months = ['jan', 'feb', 'mär', 'apr', 'mai', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dez']
-            fr_months = ['jan', 'fév', 'fev', 'mar', 'avr', 'mai', 'jui', 'juil', 'aoû', 'aou', 'sep', 'oct', 'nov', 'déc', 'dec']
             if month_lower in months_list:
                 month = months_list.index(month_lower) + 1
-            elif month_lower in es_months:
-                month = es_months.index(month_lower) + 1
-            elif month_lower in de_months:
-                month = de_months.index(month_lower) + 1
-            elif month_lower in fr_months:
-                fr_map = {'jan': 1, 'fév': 2, 'fev': 2, 'mar': 3, 'avr': 4, 'mai': 5, 'jui': 6, 'juil': 7, 'aoû': 8, 'aou': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'déc': 12, 'dec': 12}
-                month = fr_map.get(month_lower, 0)
             if month > 0:
                 return datetime.datetime(int(year_str), month, 1)
         except ValueError:
@@ -905,7 +891,7 @@ with step4:
                 st.success("✅ Evaluation completed!")
                 st.rerun()
 
-    # Render Results & Missing Details Restored Here
+    # Render Results
     if st.session_state.evaluation_results is not None:
         res = st.session_state.evaluation_results
         det_analysis = res["det_analysis"]
@@ -931,7 +917,6 @@ with step4:
         else:
             st.error(f"**Recommended Status:** {rec}")
 
-        # RESTORED: Evaluation Summary Note, Conclusion & Recruiter Suggestions Box
         st.markdown("### 📋 Evaluation Summary Note, Conclusion & Recruiter Suggestions")
         
         exp_gaps_list = det_analysis.get("experience_gaps", [])
@@ -967,7 +952,6 @@ with step4:
         weak_areas = ", ".join(failed_rules) if failed_rules else "Technical & Domain Competency, Overall Profile Fit"
         st.markdown(f"2. **Missing/Weak Areas to Probe:** {weak_areas}")
 
-        # RESTORED: Metric Cards & Gap Breakdown
         ft_exp = format_time_gap(det_analysis.get('fulltime_experience_years', 0.0))
         in_exp = format_time_gap(det_analysis.get('internship_experience_years', 0.0))
         tot_exp = format_time_gap(det_analysis.get('total_experience_years', 0.0))
