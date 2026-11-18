@@ -33,15 +33,11 @@ def mask_language_independent_pii(text: str) -> str:
     """Masks emails, phones, URLs, and govt IDs locally before sending text to LLM."""
     if not text:
         return ""
-    # Email masking
     text = re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b', '[REDACTED_EMAIL]', text)
-    # Phone number masking
     text = re.sub(r'\b(?:\+\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}\b', '[REDACTED_PHONE]', text)
     text = re.sub(r'\[REDACTED_PHONE\](?:\s*[\/\-,]\s*\[REDACTED_PHONE\])+', '[REDACTED_PHONE]', text)
-    # URL & Social links masking
     text = re.sub(r'https?://(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)', '[REDACTED_URL]', text)
     text = re.sub(r'\b(?:linkedin\.com|github\.com|twitter\.com|facebook\.com|gitlab\.com)/[a-zA-Z0-9_\-/]+', '[REDACTED_URL]', text, flags=re.IGNORECASE)
-    # Government IDs (SSN, PAN, Aadhaar, UK NINO, etc.)
     text = re.sub(r'\b\d{3}-\d{2}-\d{4}\b', '[REDACTED_GOVT_ID]', text)
     text = re.sub(r'\b[A-Z]{5}\d{4}[A-Z]{1}\b', '[REDACTED_GOVT_ID]', text)
     text = re.sub(r'\b\d{4}\s?\d{4}\s?\d{4}\b', '[REDACTED_GOVT_ID]', text)
@@ -666,14 +662,6 @@ if "form_reset_counter" not in st.session_state:
 if "rule_form_reset_counter" not in st.session_state:
     st.session_state.rule_form_reset_counter = 0
 
-# Evaluation locking states
-if "eval_completed" not in st.session_state:
-    st.session_state.eval_completed = False
-if "last_evaluated_jd" not in st.session_state:
-    st.session_state.last_evaluated_jd = ""
-if "last_evaluated_cv" not in st.session_state:
-    st.session_state.last_evaluated_cv = ""
-
 # Step Completion Gating States
 if "step1_complete" not in st.session_state:
     st.session_state.step1_complete = False
@@ -833,7 +821,7 @@ with step3:
 with step4:
     st.subheader("Step 4: Run Evaluation & View Results")
     
-    if not st.session_state.step3_complete:
+    if not st.session_state.step3_complete and st.session_state.evaluation_results is None:
         st.warning("🔒 Please complete **Step 3 (Evaluation Rules)** first before running the engine.")
     else:
         current_jd = st.session_state.get("jd_text_val", "").strip()
@@ -842,21 +830,15 @@ with step4:
         jd_ready = bool(current_jd)
         cv_ready = bool(current_cv)
         
-        is_same_input = (
-            st.session_state.eval_completed
-            and current_jd == st.session_state.last_evaluated_jd
-            and current_cv == st.session_state.last_evaluated_cv
-        )
-        
         col_chk1, col_chk2, col_chk3 = st.columns(3)
         col_chk1.metric("Step 1: JD Status", "✅ Ready" if jd_ready else "⚠️ Missing")
         col_chk2.metric("Step 2: CV Status", "✅ Ready" if cv_ready else "⚠️ Missing")
         col_chk3.metric("Step 3: Active Rules", f"{len(st.session_state.custom_rules)} Rules")
 
-        if is_same_input:
-            st.info("🔒 Evaluation already completed for this exact JD & CV. Upload or paste a new JD/CV in Step 1 & 2 to re-enable the button.")
+        if not jd_ready and not cv_ready and st.session_state.evaluation_results is not None:
+            st.info("ℹ️ Evaluation completed and inputs cleared. Upload a new JD in Step 1 and CV in Step 2 to run again.")
 
-        btn_disabled = (not jd_ready) or (not cv_ready) or is_same_input
+        btn_disabled = (not jd_ready) or (not cv_ready)
 
         if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_container_width=True, disabled=btn_disabled):
             if not groq_api_key:
@@ -961,13 +943,19 @@ with step4:
                         "word_file_io": word_file_io
                     }
                     
-                    st.session_state.eval_completed = True
-                    st.session_state.last_evaluated_jd = raw_jd
-                    st.session_state.last_evaluated_cv = raw_cv
+                    # Remove CV & JD values and reset step statuses to Missing/Locked
+                    st.session_state.jd_text_val = ""
+                    st.session_state.cv_text_val = ""
+                    st.session_state.jd_name_val = "Pasted JD Text"
+                    st.session_state.candidate_name_val = "Candidate Name"
+                    
+                    st.session_state.step1_complete = False
+                    st.session_state.step2_complete = False
+                    st.session_state.step3_complete = False
                     st.session_state.step4_complete = True
                     
                     st.session_state.form_reset_counter += 1
-                    st.success("✅ Evaluation completed!")
+                    st.success("✅ Evaluation completed! Inputs cleared.")
                     st.rerun()
 
         if st.session_state.evaluation_results is not None:
