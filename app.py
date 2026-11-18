@@ -674,6 +674,16 @@ if "last_evaluated_jd" not in st.session_state:
 if "last_evaluated_cv" not in st.session_state:
     st.session_state.last_evaluated_cv = ""
 
+# Step Completion Gating States
+if "step1_complete" not in st.session_state:
+    st.session_state.step1_complete = False
+if "step2_complete" not in st.session_state:
+    st.session_state.step2_complete = False
+if "step3_complete" not in st.session_state:
+    st.session_state.step3_complete = False
+if "step4_complete" not in st.session_state:
+    st.session_state.step4_complete = False
+
 # Sidebar Security & Credentials
 with st.sidebar:
     st.header("🔐 Security & Credentials")
@@ -698,7 +708,7 @@ with st.sidebar:
     st.info(f"**Model:** {MODEL_VERSION}\n\n**Logic:** {LOGIC_VERSION}")
 
 # ------------------------------------------------------------------------------
-# STEP-BY-STEP WIZARD NAVIGATION
+# STEP-BY-STEP WIZARD NAVIGATION WITH SEQUENTIAL GATING
 # ------------------------------------------------------------------------------
 counter = st.session_state.form_reset_counter
 
@@ -727,336 +737,359 @@ with step1:
     st.session_state.jd_text_val = jd_text
     st.session_state.jd_name_val = jd_file.name if (jd_file and hasattr(jd_file, 'name')) else "Pasted JD Text"
 
+    if jd_text.strip():
+        st.session_state.step1_complete = True
+        st.success("🎉 Step 1 Complete! You can now proceed to **Step 2: Candidate CV**.")
+    else:
+        st.session_state.step1_complete = False
+
 # --- STEP 2: CANDIDATE CV ---
 with step2:
     st.subheader("Step 2: Upload or Paste Candidate Resume (CV)")
-    candidate_name = st.text_input("Candidate Full Name (Masked for Storage)", value="Candidate Name", key=f"cand_name_{counter}")
-    cv_input_type = st.radio("CV Input Method", ["File Upload", "Paste Text"], key=f"cv_type_{counter}", horizontal=True)
-    cv_file = None
-    cv_text = ""
-    if cv_input_type == "File Upload":
-        cv_file = st.file_uploader("Upload Resume (PDF, DOCX, TXT, Image)", type=["pdf", "docx", "txt", "png", "jpg"], key=f"cv_file_{counter}")
-        if cv_file:
-            cv_text = extract_text_with_ocr(cv_file)
-            st.success(f"✅ Loaded Resume: **{cv_file.name}**")
+    
+    if not st.session_state.step1_complete:
+        st.warning("🔒 Please complete **Step 1 (Job Description)** first before accessing this tab.")
     else:
-        cv_text = st.text_area("Paste Candidate Resume Content", height=200, key=f"cv_textarea_{counter}")
+        candidate_name = st.text_input("Candidate Full Name (Masked for Storage)", value="Candidate Name", key=f"cand_name_{counter}")
+        cv_input_type = st.radio("CV Input Method", ["File Upload", "Paste Text"], key=f"cv_type_{counter}", horizontal=True)
+        cv_file = None
+        cv_text = ""
+        if cv_input_type == "File Upload":
+            cv_file = st.file_uploader("Upload Resume (PDF, DOCX, TXT, Image)", type=["pdf", "docx", "txt", "png", "jpg"], key=f"cv_file_{counter}")
+            if cv_file:
+                cv_text = extract_text_with_ocr(cv_file)
+                st.success(f"✅ Loaded Resume: **{cv_file.name}**")
+        else:
+            cv_text = st.text_area("Paste Candidate Resume Content", height=200, key=f"cv_textarea_{counter}")
 
-    st.session_state.cv_text_val = cv_text
-    st.session_state.candidate_name_val = candidate_name
+        st.session_state.cv_text_val = cv_text
+        st.session_state.candidate_name_val = candidate_name
+
+        if cv_text.strip():
+            st.session_state.step2_complete = True
+            st.success("🎉 Step 2 Complete! You can now proceed to **Step 3: Evaluation Rules**.")
+        else:
+            st.session_state.step2_complete = False
 
 # --- STEP 3: RULES BUILDER ---
 with step3:
     st.subheader("Step 3: Configure Evaluation Rules")
-    with st.expander("➕ Add New Evaluation Rule", expanded=False):
-        rc = st.session_state.rule_form_reset_counter
-        new_name = st.text_input("Rule Name", key=f"new_r_name_{rc}")
-        new_type = st.selectbox("Rule Type", ["Deterministic", "Skill Check", "Compliance", "Custom"], key=f"new_r_type_{rc}")
-        new_criteria = st.text_area("Rule Description / Criteria", key=f"new_r_crit_{rc}")
-        
-        if st.button("Add Rule"):
-            if new_name and new_criteria:
-                max_id = max([r['id'] for r in st.session_state.custom_rules]) if st.session_state.custom_rules else 0
-                st.session_state.custom_rules.append({"id": max_id + 1, "name": new_name, "type": new_type, "criteria": new_criteria})
-                st.session_state.rule_form_reset_counter += 1
-                st.success("Rule added successfully!")
+    
+    if not st.session_state.step2_complete:
+        st.warning("🔒 Please complete **Step 2 (Candidate CV)** first before configuring rules.")
+    else:
+        st.session_state.step3_complete = True
+        with st.expander("➕ Add New Evaluation Rule", expanded=False):
+            rc = st.session_state.rule_form_reset_counter
+            new_name = st.text_input("Rule Name", key=f"new_r_name_{rc}")
+            new_type = st.selectbox("Rule Type", ["Deterministic", "Skill Check", "Compliance", "Custom"], key=f"new_r_type_{rc}")
+            new_criteria = st.text_area("Rule Description / Criteria", key=f"new_r_crit_{rc}")
+            
+            if st.button("Add Rule"):
+                if new_name and new_criteria:
+                    max_id = max([r['id'] for r in st.session_state.custom_rules]) if st.session_state.custom_rules else 0
+                    st.session_state.custom_rules.append({"id": max_id + 1, "name": new_name, "type": new_type, "criteria": new_criteria})
+                    st.session_state.rule_form_reset_counter += 1
+                    st.success("Rule added successfully!")
+                    st.rerun()
+                else:
+                    st.warning("Please fill both Rule Name and Criteria.")
+
+        st.markdown("#### Active Evaluation Rules")
+        updated_rules = []
+        for idx, rule in enumerate(st.session_state.custom_rules):
+            c1, c2, c3, c4 = st.columns([1, 5, 1, 1])
+            c1.markdown(f"**Rule {idx+1}**")
+            c2.markdown(f"**{rule['name']}** ({rule.get('type', 'Custom')}): *{rule['criteria']}*")
+            if c3.button("✏️", key=f"edit_{rule['id']}"):
+                st.session_state.editing_rule_id = rule['id']
                 st.rerun()
-            else:
-                st.warning("Please fill both Rule Name and Criteria.")
+            if c4.button("❌", key=f"del_{rule['id']}"):
+                if st.session_state.editing_rule_id == rule['id']:
+                    st.session_state.editing_rule_id = None
+                continue
+            updated_rules.append(rule)
 
-    st.markdown("#### Active Evaluation Rules")
-    updated_rules = []
-    for idx, rule in enumerate(st.session_state.custom_rules):
-        c1, c2, c3, c4 = st.columns([1, 5, 1, 1])
-        c1.markdown(f"**Rule {idx+1}**")
-        c2.markdown(f"**{rule['name']}** ({rule.get('type', 'Custom')}): *{rule['criteria']}*")
-        if c3.button("✏️", key=f"edit_{rule['id']}"):
-            st.session_state.editing_rule_id = rule['id']
-            st.rerun()
-        if c4.button("❌", key=f"del_{rule['id']}"):
             if st.session_state.editing_rule_id == rule['id']:
-                st.session_state.editing_rule_id = None
-            continue
-        updated_rules.append(rule)
+                with st.container():
+                    st.markdown(f"**✏️ Editing Rule #{idx+1}**")
+                    edited_name = st.text_input("Edit Rule Name", value=rule['name'], key=f"ename_{rule['id']}")
+                    edited_type = st.selectbox("Edit Rule Type", ["Deterministic", "Skill Check", "Compliance", "Custom"], key=f"etype_{rule['id']}")
+                    edited_criteria = st.text_area("Edit Criteria", value=rule['criteria'], key=f"ecrit_{rule['id']}")
+                    col_s1, col_s2 = st.columns(2)
+                    if col_s1.button("💾 Save Changes", key=f"save_{rule['id']}"):
+                        rule['name'], rule['type'], rule['criteria'] = edited_name, edited_type, edited_criteria
+                        st.session_state.editing_rule_id = None
+                        st.rerun()
+                    if col_s2.button("Cancel", key=f"cancel_{rule['id']}"):
+                        st.session_state.editing_rule_id = None
+                        st.rerun()
 
-        if st.session_state.editing_rule_id == rule['id']:
-            with st.container():
-                st.markdown(f"**✏️ Editing Rule #{idx+1}**")
-                edited_name = st.text_input("Edit Rule Name", value=rule['name'], key=f"ename_{rule['id']}")
-                edited_type = st.selectbox("Edit Rule Type", ["Deterministic", "Skill Check", "Compliance", "Custom"], key=f"etype_{rule['id']}")
-                edited_criteria = st.text_area("Edit Criteria", value=rule['criteria'], key=f"ecrit_{rule['id']}")
-                col_s1, col_s2 = st.columns(2)
-                if col_s1.button("💾 Save Changes", key=f"save_{rule['id']}"):
-                    rule['name'], rule['type'], rule['criteria'] = edited_name, edited_type, edited_criteria
-                    st.session_state.editing_rule_id = None
-                    st.rerun()
-                if col_s2.button("Cancel", key=f"cancel_{rule['id']}"):
-                    st.session_state.editing_rule_id = None
-                    st.rerun()
-
-    if len(updated_rules) != len(st.session_state.custom_rules):
-        st.session_state.custom_rules = updated_rules
-        st.rerun()
+        if len(updated_rules) != len(st.session_state.custom_rules):
+            st.session_state.custom_rules = updated_rules
+            st.rerun()
 
 # --- STEP 4: RUN EVALUATION & VIEW RESULTS ---
 with step4:
     st.subheader("Step 4: Run Evaluation & View Results")
     
-    current_jd = st.session_state.get("jd_text_val", "").strip()
-    current_cv = st.session_state.get("cv_text_val", "").strip()
-    
-    jd_ready = bool(current_jd)
-    cv_ready = bool(current_cv)
-    
-    # Check if evaluation has already been completed for the current input
-    is_same_input = (
-        st.session_state.eval_completed
-        and current_jd == st.session_state.last_evaluated_jd
-        and current_cv == st.session_state.last_evaluated_cv
-    )
-    
-    col_chk1, col_chk2, col_chk3 = st.columns(3)
-    col_chk1.metric("Step 1: JD Status", "✅ Ready" if jd_ready else "⚠️ Missing")
-    col_chk2.metric("Step 2: CV Status", "✅ Ready" if cv_ready else "⚠️ Missing")
-    col_chk3.metric("Step 3: Active Rules", f"{len(st.session_state.custom_rules)} Rules")
-
-    if is_same_input:
-        st.info("🔒 Evaluation already completed for this exact JD & CV. Upload or paste a new JD/CV in Step 1 & 2 to re-enable the button.")
-
-    btn_disabled = (not jd_ready) or (not cv_ready) or is_same_input
-
-    if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_container_width=True, disabled=btn_disabled):
-        if not groq_api_key:
-            st.error("❌ Groq API Key is required in the sidebar.")
-        elif not cv_ready or not jd_ready:
-            st.warning("⚠️ Please complete Step 1 (JD) and Step 2 (Candidate Resume) first.")
-        else:
-            raw_cv = current_cv
-            raw_jd = current_jd
-            cand_name_input = st.session_state.candidate_name_val
-            jd_name = st.session_state.jd_name_val
-
-            # 🔒 SECURITY LAYER 1: Pre-mask language-independent PII (Emails, Phones, URLs, Govt IDs) locally before API call
-            pre_masked_cv = mask_language_independent_pii(raw_cv)
-            pre_masked_jd = mask_language_independent_pii(raw_jd)
-
-            # 1. Fast Language Detection Check
-            cv_lang_check = detect_language_fast(pre_masked_cv, groq_api_key)
-            jd_lang_check = detect_language_fast(pre_masked_jd, groq_api_key)
-            is_non_english = ("english" not in cv_lang_check.lower()) or ("english" not in jd_lang_check.lower())
-
-            # 2. Conditional Translation Spinner (using pre-masked text)
-            if is_non_english:
-                with st.spinner(f"🌐 Non-English document detected ({cv_lang_check} / {jd_lang_check}). Language translation in progress..."):
-                    translated_cv, detected_cv_lang, timeline_data = translate_and_extract_cv_structure(pre_masked_cv, groq_api_key)
-                    translated_jd, detected_jd_lang = detect_and_translate_jd(pre_masked_jd, groq_api_key)
-            else:
-                with st.spinner("⚙️ Extracting structured timelines and running deterministic evaluation..."):
-                    translated_cv, detected_cv_lang, timeline_data = translate_and_extract_cv_structure(pre_masked_cv, groq_api_key)
-                    translated_jd, detected_jd_lang = pre_masked_jd, "English"
-
-            # 🔒 SECURITY LAYER 2: Post-Translation Semantic PII Masking & Deterministic Math
-            with st.spinner("🔒 Masking remaining linguistic PII and calculating deterministic career metrics..."):
-                det_analysis = calculate_deterministic_timeline(timeline_data)
-                det_analysis["detected_cv_language"] = detected_cv_lang
-                det_analysis["detected_jd_language"] = detected_jd_lang
-
-                masked_cv_text = mask_pii_in_text(translated_cv)
-                jd_analysis = extract_jd_requirements(translated_jd, groq_api_key)
-                evidence_map = extract_universal_evidence(masked_cv_text)
-
-                chunk_size = 4
-                rule_chunks = [st.session_state.custom_rules[i:i + chunk_size] for i in range(0, len(st.session_state.custom_rules), chunk_size)]
-                combined_rule_evals = {}
-                score_points = 0.0
-                total_rules = len(st.session_state.custom_rules)
-
-                for chunk in rule_chunks:
-                    res = evaluate_batch_chunk(masked_cv_text, translated_jd, chunk, groq_api_key, det_analysis=det_analysis)
-                    evals = res.get("Rule Evaluations", {})
-                    for r_name, r_data in evals.items():
-                        combined_rule_evals[r_name] = r_data
-                        res_str = str(r_data.get("result", "")).lower()
-                        if "pass" in res_str and "partial" not in res_str:
-                            score_points += 1.0
-                        elif "partial" in res_str:
-                            score_points += 0.7
-
-                overall_score = round((score_points / max(total_rules, 1)) * 100, 1)
-                combined_rule_evals, overall_score, rec, summary_text = apply_fully_dynamic_guardrails(
-                    jd_analysis, det_analysis, combined_rule_evals, overall_score, "Consider"
-                )
-
-                anonymized_candidate_name = f"Candidate_{abs(hash(cand_name_input)) % 10000}"
-                word_file_io = generate_in_memory_word_report(
-                    anonymized_candidate_name, evaluator_id, overall_score, rec, det_analysis, combined_rule_evals, evidence_map
-                )
-
-                conn = sqlite3.connect(DB_PATH)
-                cursor = conn.cursor()
-                cursor.execute("""
-                    INSERT INTO evaluations (
-                        timestamp, recruiter_id, candidate_name, overall_score, recommendation, 
-                        human_override, override_notes, cv_source_name, jd_source_name, 
-                        dynamic_rule_config, deterministic_analysis, ai_evaluations, 
-                        evidence_snippets, model_version, logic_version
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    evaluator_id,
-                    anonymized_candidate_name,
-                    overall_score,
-                    rec,
-                    "Contextual Dynamic Guardrail Evaluation",
-                    "",
-                    "Anonymized_CV",
-                    jd_name,
-                    json.dumps(st.session_state.custom_rules),
-                    json.dumps(det_analysis),
-                    json.dumps({"Rule Evaluations": combined_rule_evals, "Overall Candidate Match Score": overall_score}),
-                    json.dumps(evidence_map),
-                    MODEL_VERSION,
-                    LOGIC_VERSION
-                ))
-                conn.commit()
-                conn.close()
-
-                st.session_state.evaluation_results = {
-                    "candidate_name": anonymized_candidate_name,
-                    "overall_score": overall_score,
-                    "recommendation": rec,
-                    "det_analysis": det_analysis,
-                    "rule_evals": combined_rule_evals,
-                    "evidence_map": evidence_map,
-                    "summary": summary_text,
-                    "word_file_io": word_file_io
-                }
-                
-                # Lock button for current inputs
-                st.session_state.eval_completed = True
-                st.session_state.last_evaluated_jd = raw_jd
-                st.session_state.last_evaluated_cv = raw_cv
-                
-                st.session_state.form_reset_counter += 1
-                st.success("✅ Evaluation completed!")
-                st.rerun()
-
-    # Render Results
-    if st.session_state.evaluation_results is not None:
-        res = st.session_state.evaluation_results
-        det_analysis = res["det_analysis"]
-        overall_score = res["overall_score"]
-        rec = res["recommendation"]
-        rule_evals = res["rule_evals"]
-        summary_text = res.get("summary", "")
-
-        st.markdown("---")
-        st.download_button(
-            label="📥 Download Evaluation Report (.docx)",
-            data=res["word_file_io"],
-            file_name=f"Candidate_Report_{res['candidate_name']}.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            type="primary"
+    if not st.session_state.step3_complete:
+        st.warning("🔒 Please complete **Step 3 (Evaluation Rules)** first before running the engine.")
+    else:
+        current_jd = st.session_state.get("jd_text_val", "").strip()
+        current_cv = st.session_state.get("cv_text_val", "").strip()
+        
+        jd_ready = bool(current_jd)
+        cv_ready = bool(current_cv)
+        
+        is_same_input = (
+            st.session_state.eval_completed
+            and current_jd == st.session_state.last_evaluated_jd
+            and current_cv == st.session_state.last_evaluated_cv
         )
-
-        st.markdown("### 📌 AI Recommendation & Verdict")
-        if "Strong Hire" in rec:
-            st.success(f"**Recommended Status:** {rec}")
-        elif "Consider" in rec:
-            st.warning(f"**Recommended Status:** {rec}")
-        else:
-            st.error(f"**Recommended Status:** {rec}")
-
-        st.markdown("### 📋 Evaluation Summary Note, Conclusion & Recruiter Suggestions")
         
-        exp_gaps_list = det_analysis.get("experience_gaps", [])
-        has_gaps = any("Gap of" in gap for gap in exp_gaps_list)
-        cv_lang = det_analysis.get("detected_cv_language", "English")
-        jd_lang = det_analysis.get("detected_jd_language", "English")
+        col_chk1, col_chk2, col_chk3 = st.columns(3)
+        col_chk1.metric("Step 1: JD Status", "✅ Ready" if jd_ready else "⚠️ Missing")
+        col_chk2.metric("Step 2: CV Status", "✅ Ready" if cv_ready else "⚠️ Missing")
+        col_chk3.metric("Step 3: Active Rules", f"{len(st.session_state.custom_rules)} Rules")
 
-        if overall_score >= 80 and not has_gaps:
-            conclusion_html = "✅ High Potential / Ready for Interview"
-            next_step_msg = "Strong alignment with core JD requirements. Recommend scheduling an initial technical interview."
-        elif has_gaps or overall_score >= 40:
-            conclusion_html = "⚠️ Moderate Match / Needs Clarification (Gaps Detected)"
-            gap_str = ", ".join(exp_gaps_list) if has_gaps else "employment timeline"
-            next_step_msg = f"Candidate demonstrates strong technical alignment. Do not reject immediately, but probe into the following gaps during initial screening: {gap_str}."
-        else:
-            conclusion_html = "❌ Low Alignment / Not Recommended"
-            next_step_msg = "Significant gaps found against core JD requirements. Recommend sending a polite rejection notice."
+        if is_same_input:
+            st.info("🔒 Evaluation already completed for this exact JD & CV. Upload or paste a new JD/CV in Step 1 & 2 to re-enable the button.")
 
-        tot_exp_formatted = format_time_gap(det_analysis.get('total_experience_years', 0.0))
-        edu_gap_formatted = det_analysis.get('education_to_job_gap', '0 Months')
+        btn_disabled = (not jd_ready) or (not cv_ready) or is_same_input
 
-        st.info(
-            f"**Conclusion Status:** {conclusion_html}\n\n"
-            f"**Detected CV Language:** {cv_lang} | **Detected JD Language:** {jd_lang}\n\n"
-            f"**Overall Score:** {overall_score}/100 | **Total Experience:** {tot_exp_formatted} | **Education-to-Job Gap:** {edu_gap_formatted}\n\n"
-            f"**Summary:** {summary_text}"
-        )
-
-        st.markdown("#### 💡 Actionable Suggestions for Recruiter")
-        st.markdown(f"1. **Next Step:** {next_step_msg}")
-        
-        failed_rules = [r_name for r_name, r_data in rule_evals.items() if str(r_data.get("result", "")).lower() in ["fail", "partial match"]]
-        weak_areas = ", ".join(failed_rules) if failed_rules else "Technical & Domain Competency, Overall Profile Fit"
-        st.markdown(f"2. **Missing/Weak Areas to Probe:** {weak_areas}")
-
-        ft_exp = format_time_gap(det_analysis.get('fulltime_experience_years', 0.0))
-        in_exp = format_time_gap(det_analysis.get('internship_experience_years', 0.0))
-        tot_exp = format_time_gap(det_analysis.get('total_experience_years', 0.0))
-
-        st.markdown("---")
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Overall Match Score", f"{overall_score} / 100")
-        m2.metric("Full-Time Exp", ft_exp)
-        m3.metric("Intern Exp", in_exp)
-        m4.metric("Total Experience", tot_exp)
-
-        st.markdown("### 🔍 Career & Education Gap Breakdown (Math Calculated)")
-        col_g1, col_g2 = st.columns(2)
-        
-        with col_g1:
-            st.markdown("#### 💼 Experience Gaps")
-            if isinstance(exp_gaps_list, list) and len(exp_gaps_list) > 0:
-                for gap in exp_gaps_list:
-                    st.markdown(f"- {gap}")
+        if st.button("🚀 Run Fully Dynamic Evaluation Engine", type="primary", use_container_width=True, disabled=btn_disabled):
+            if not groq_api_key:
+                st.error("❌ Groq API Key is required in the sidebar.")
+            elif not cv_ready or not jd_ready:
+                st.warning("⚠️ Please complete Step 1 (JD) and Step 2 (Candidate Resume) first.")
             else:
-                st.markdown("- No major experience gaps found")
-                
-        with col_g2:
-            st.markdown("#### 🎓 Education & Transition Gaps")
-            edu_to_job_val = det_analysis.get("education_to_job_gap", "0 Months")
-            st.metric(label="Education-to-Job Transition Gap", value=edu_to_job_val)
+                raw_cv = current_cv
+                raw_jd = current_jd
+                cand_name_input = st.session_state.candidate_name_val
+                jd_name = st.session_state.jd_name_val
 
-        st.markdown("### 📊 Universal Evaluation Matrix & Confidence")
-        grid = []
-        for r_name, r_data in rule_evals.items():
-            grid.append({
-                "Rule": r_name,
-                "Result": r_data.get("result"),
-                "Confidence": r_data.get("confidence"),
-                "Reasoning": r_data.get("reasoning")
-            })
-        st.table(pd.DataFrame(grid))
+                pre_masked_cv = mask_language_independent_pii(raw_cv)
+                pre_masked_jd = mask_language_independent_pii(raw_jd)
+
+                cv_lang_check = detect_language_fast(pre_masked_cv, groq_api_key)
+                jd_lang_check = detect_language_fast(pre_masked_jd, groq_api_key)
+                is_non_english = ("english" not in cv_lang_check.lower()) or ("english" not in jd_lang_check.lower())
+
+                if is_non_english:
+                    with st.spinner(f"🌐 Non-English document detected ({cv_lang_check} / {jd_lang_check}). Language translation in progress..."):
+                        translated_cv, detected_cv_lang, timeline_data = translate_and_extract_cv_structure(pre_masked_cv, groq_api_key)
+                        translated_jd, detected_jd_lang = detect_and_translate_jd(pre_masked_jd, groq_api_key)
+                else:
+                    with st.spinner("⚙️ Extracting structured timelines and running deterministic evaluation..."):
+                        translated_cv, detected_cv_lang, timeline_data = translate_and_extract_cv_structure(pre_masked_cv, groq_api_key)
+                        translated_jd, detected_jd_lang = pre_masked_jd, "English"
+
+                with st.spinner("🔒 Masking remaining linguistic PII and calculating deterministic career metrics..."):
+                    det_analysis = calculate_deterministic_timeline(timeline_data)
+                    det_analysis["detected_cv_language"] = detected_cv_lang
+                    det_analysis["detected_jd_language"] = detected_jd_lang
+
+                    masked_cv_text = mask_pii_in_text(translated_cv)
+                    jd_analysis = extract_jd_requirements(translated_jd, groq_api_key)
+                    evidence_map = extract_universal_evidence(masked_cv_text)
+
+                    chunk_size = 4
+                    rule_chunks = [st.session_state.custom_rules[i:i + chunk_size] for i in range(0, len(st.session_state.custom_rules), chunk_size)]
+                    combined_rule_evals = {}
+                    score_points = 0.0
+                    total_rules = len(st.session_state.custom_rules)
+
+                    for chunk in rule_chunks:
+                        res = evaluate_batch_chunk(masked_cv_text, translated_jd, chunk, groq_api_key, det_analysis=det_analysis)
+                        evals = res.get("Rule Evaluations", {})
+                        for r_name, r_data in evals.items():
+                            combined_rule_evals[r_name] = r_data
+                            res_str = str(r_data.get("result", "")).lower()
+                            if "pass" in res_str and "partial" not in res_str:
+                                score_points += 1.0
+                            elif "partial" in res_str:
+                                score_points += 0.7
+
+                    overall_score = round((score_points / max(total_rules, 1)) * 100, 1)
+                    combined_rule_evals, overall_score, rec, summary_text = apply_fully_dynamic_guardrails(
+                        jd_analysis, det_analysis, combined_rule_evals, overall_score, "Consider"
+                    )
+
+                    anonymized_candidate_name = f"Candidate_{abs(hash(cand_name_input)) % 10000}"
+                    word_file_io = generate_in_memory_word_report(
+                        anonymized_candidate_name, evaluator_id, overall_score, rec, det_analysis, combined_rule_evals, evidence_map
+                    )
+
+                    conn = sqlite3.connect(DB_PATH)
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO evaluations (
+                            timestamp, recruiter_id, candidate_name, overall_score, recommendation, 
+                            human_override, override_notes, cv_source_name, jd_source_name, 
+                            dynamic_rule_config, deterministic_analysis, ai_evaluations, 
+                            evidence_snippets, model_version, logic_version
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        evaluator_id,
+                        anonymized_candidate_name,
+                        overall_score,
+                        rec,
+                        "Contextual Dynamic Guardrail Evaluation",
+                        "",
+                        "Anonymized_CV",
+                        jd_name,
+                        json.dumps(st.session_state.custom_rules),
+                        json.dumps(det_analysis),
+                        json.dumps({"Rule Evaluations": combined_rule_evals, "Overall Candidate Match Score": overall_score}),
+                        json.dumps(evidence_map),
+                        MODEL_VERSION,
+                        LOGIC_VERSION
+                    ))
+                    conn.commit()
+                    conn.close()
+
+                    st.session_state.evaluation_results = {
+                        "candidate_name": anonymized_candidate_name,
+                        "overall_score": overall_score,
+                        "recommendation": rec,
+                        "det_analysis": det_analysis,
+                        "rule_evals": combined_rule_evals,
+                        "evidence_map": evidence_map,
+                        "summary": summary_text,
+                        "word_file_io": word_file_io
+                    }
+                    
+                    st.session_state.eval_completed = True
+                    st.session_state.last_evaluated_jd = raw_jd
+                    st.session_state.last_evaluated_cv = raw_cv
+                    st.session_state.step4_complete = True
+                    
+                    st.session_state.form_reset_counter += 1
+                    st.success("✅ Evaluation completed!")
+                    st.rerun()
+
+        if st.session_state.evaluation_results is not None:
+            st.session_state.step4_complete = True
+            res = st.session_state.evaluation_results
+            det_analysis = res["det_analysis"]
+            overall_score = res["overall_score"]
+            rec = res["recommendation"]
+            rule_evals = res["rule_evals"]
+            summary_text = res.get("summary", "")
+
+            st.markdown("---")
+            st.download_button(
+                label="📥 Download Evaluation Report (.docx)",
+                data=res["word_file_io"],
+                file_name=f"Candidate_Report_{res['candidate_name']}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                type="primary"
+            )
+
+            st.markdown("### 📌 AI Recommendation & Verdict")
+            if "Strong Hire" in rec:
+                st.success(f"**Recommended Status:** {rec}")
+            elif "Consider" in rec:
+                st.warning(f"**Recommended Status:** {rec}")
+            else:
+                st.error(f"**Recommended Status:** {rec}")
+
+            st.markdown("### 📋 Evaluation Summary Note, Conclusion & Recruiter Suggestions")
+            
+            exp_gaps_list = det_analysis.get("experience_gaps", [])
+            has_gaps = any("Gap of" in gap for gap in exp_gaps_list)
+            cv_lang = det_analysis.get("detected_cv_language", "English")
+            jd_lang = det_analysis.get("detected_jd_language", "English")
+
+            if overall_score >= 80 and not has_gaps:
+                conclusion_html = "✅ High Potential / Ready for Interview"
+                next_step_msg = "Strong alignment with core JD requirements. Recommend scheduling an initial technical interview."
+            elif has_gaps or overall_score >= 40:
+                conclusion_html = "⚠️ Moderate Match / Needs Clarification (Gaps Detected)"
+                gap_str = ", ".join(exp_gaps_list) if has_gaps else "employment timeline"
+                next_step_msg = f"Candidate demonstrates strong technical alignment. Do not reject immediately, but probe into the following gaps during initial screening: {gap_str}."
+            else:
+                conclusion_html = "❌ Low Alignment / Not Recommended"
+                next_step_msg = "Significant gaps found against core JD requirements. Recommend sending a polite rejection notice."
+
+            tot_exp_formatted = format_time_gap(det_analysis.get('total_experience_years', 0.0))
+            edu_gap_formatted = det_analysis.get('education_to_job_gap', '0 Months')
+
+            st.info(
+                f"**Conclusion Status:** {conclusion_html}\n\n"
+                f"**Detected CV Language:** {cv_lang} | **Detected JD Language:** {jd_lang}\n\n"
+                f"**Overall Score:** {overall_score}/100 | **Total Experience:** {tot_exp_formatted} | **Education-to-Job Gap:** {edu_gap_formatted}\n\n"
+                f"**Summary:** {summary_text}"
+            )
+
+            st.markdown("#### 💡 Actionable Suggestions for Recruiter")
+            st.markdown(f"1. **Next Step:** {next_step_msg}")
+            
+            failed_rules = [r_name for r_name, r_data in rule_evals.items() if str(r_data.get("result", "")).lower() in ["fail", "partial match"]]
+            weak_areas = ", ".join(failed_rules) if failed_rules else "Technical & Domain Competency, Overall Profile Fit"
+            st.markdown(f"2. **Missing/Weak Areas to Probe:** {weak_areas}")
+
+            ft_exp = format_time_gap(det_analysis.get('fulltime_experience_years', 0.0))
+            in_exp = format_time_gap(det_analysis.get('internship_experience_years', 0.0))
+            tot_exp = format_time_gap(det_analysis.get('total_experience_years', 0.0))
+
+            st.markdown("---")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Overall Match Score", f"{overall_score} / 100")
+            m2.metric("Full-Time Exp", ft_exp)
+            m3.metric("Intern Exp", in_exp)
+            m4.metric("Total Experience", tot_exp)
+
+            st.markdown("### 🔍 Career & Education Gap Breakdown (Math Calculated)")
+            col_g1, col_g2 = st.columns(2)
+            
+            with col_g1:
+                st.markdown("#### 💼 Experience Gaps")
+                if isinstance(exp_gaps_list, list) and len(exp_gaps_list) > 0:
+                    for gap in exp_gaps_list:
+                        st.markdown(f"- {gap}")
+                else:
+                    st.markdown("- No major experience gaps found")
+                    
+            with col_g2:
+                st.markdown("#### 🎓 Education & Transition Gaps")
+                edu_to_job_val = det_analysis.get("education_to_job_gap", "0 Months")
+                st.metric(label="Education-to-Job Transition Gap", value=edu_to_job_val)
+
+            st.markdown("### 📊 Universal Evaluation Matrix & Confidence")
+            grid = []
+            for r_name, r_data in rule_evals.items():
+                grid.append({
+                    "Rule": r_name,
+                    "Result": r_data.get("result"),
+                    "Confidence": r_data.get("confidence"),
+                    "Reasoning": r_data.get("reasoning")
+                })
+            st.table(pd.DataFrame(grid))
 
 # --- STEP 5: AUDIT TRAIL ---
 with step5:
     st.subheader("Step 5: Complete Audit Trail & History")
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, timestamp, recruiter_id, candidate_name, overall_score, recommendation, cv_source_name, jd_source_name, model_version FROM evaluations ORDER BY id DESC")
-    rows = cursor.fetchall()
-    conn.close()
-
-    if rows:
-        for row in rows:
-            eval_id, timestamp, rec_id, cand_name, score, rec, cv_src, jd_src, model_v = row
-            with st.expander(f"Record #{eval_id} | {cand_name} - Score: {score}/100 ({timestamp})"):
-                c1, c2, c3 = st.columns(3)
-                c1.write(f"**Recruiter:** {rec_id}")
-                c2.write(f"**Recommendation:** {rec}")
-                c3.write(f"**Model:** {model_v}")
-                st.text(f"CV Source: {cv_src} | JD Source: {jd_src}")
+    
+    if not st.session_state.step4_complete and st.session_state.evaluation_results is None:
+        st.warning("🔒 Please complete the evaluation in **Step 4** to view audit trail history.")
     else:
-        st.info("No evaluation records found yet.")
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, timestamp, recruiter_id, candidate_name, overall_score, recommendation, cv_source_name, jd_source_name, model_version FROM evaluations ORDER BY id DESC")
+        rows = cursor.fetchall()
+        conn.close()
+
+        if rows:
+            for row in rows:
+                eval_id, timestamp, rec_id, cand_name, score, rec, cv_src, jd_src, model_v = row
+                with st.expander(f"Record #{eval_id} | {cand_name} - Score: {score}/100 ({timestamp})"):
+                    c1, c2, c3 = st.columns(3)
+                    c1.write(f"**Recruiter:** {rec_id}")
+                    c2.write(f"**Recommendation:** {rec}")
+                    c3.write(f"**Model:** {model_v}")
+                    st.text(f"CV Source: {cv_src} | JD Source: {jd_src}")
+        else:
+            st.info("No evaluation records found yet.")
